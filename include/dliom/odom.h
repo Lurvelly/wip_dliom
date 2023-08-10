@@ -11,6 +11,7 @@
  ***********************************************************/
 
 #include "dliom/dliom.h"
+#include "dliom/gnss.h"
 
 class dliom::OdomNode {
 
@@ -30,6 +31,7 @@ private:
 
   void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc);
   void callbackImu(const sensor_msgs::Imu::ConstPtr& imu);
+  void callbackGNSS(const sensor_msgs::NavSatFix::ConstPtr& gnss);
 
   void publishPose(const ros::TimerEvent& e);
 
@@ -88,6 +90,7 @@ private:
   // Subscribers
   ros::Subscriber lidar_sub;
   ros::Subscriber imu_sub;
+  ros::Subscriber gnss_sub;
 
   // Publishers
   ros::Publisher odom_pub;
@@ -129,6 +132,7 @@ private:
   std::vector<ros::Time> keyframe_timestamps;
   std::vector<std::shared_ptr<const nano_gicp::CovarianceList>> keyframe_normals;
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> keyframe_transformations;
+  int closest_idx;
   std::mutex keyframes_mutex;
 
   // Sensor Type
@@ -203,7 +207,7 @@ private:
     SE3 baselink2lidar;
     Eigen::Matrix4f baselink2imu_T;
     Eigen::Matrix4f baselink2lidar_T;
-  }; Extrinsics extrinsics;
+  } extrinsics;
 
   // IMU
   ros::Time imu_stamp;
@@ -216,7 +220,7 @@ private:
     double dt; // defined as the difference between the current and the previous measurement
     Eigen::Vector3f ang_vel;
     Eigen::Vector3f lin_accel;
-  }; ImuMeas imu_meas;
+  } imu_meas;
 
   boost::circular_buffer<ImuMeas> imu_buffer;
   std::mutex mtx_imu;
@@ -225,6 +229,24 @@ private:
   static bool comparatorImu(ImuMeas m1, ImuMeas m2) {
     return (m1.stamp < m2.stamp);
   };
+
+  // GNSS
+  double gnss_stamp;
+  double prev_gnss_stamp;
+
+  struct GNSSMeas {
+      ENU meas;
+      double time;
+      Eigen::Vector3d cov;
+      int kf_id_match = -1;
+  } gnss_meas;
+
+  dliom::LocalCartesianGNSS gnss_converter;
+  boost::circular_buffer<GNSSMeas> gnss_buffer;
+  std::mutex mtx_gnss;
+  bool matchGNSSWithKf(GNSSMeas& meas);
+  std::atomic<double> avg_gnss_rate;
+  std::vector<double> gnss_rates;
 
   // Geometric Observer
   struct Geo {

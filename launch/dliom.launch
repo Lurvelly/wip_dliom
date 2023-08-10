@@ -17,6 +17,7 @@
 
   <arg name="pointcloud_topic" default="lidar"/>
   <arg name="imu_topic" default="imu"/>
+  <arg name="gnss_topic" default="gnss"/>
 
   <!-- dliom Odometry Node -->
   <node ns="$(arg robot_namespace)" name="dliom_odom" pkg="dliom" type="dliom_odom_node" output="screen" clear_params="true">
@@ -28,6 +29,7 @@
     <!-- Subscriptions -->
     <remap from="~pointcloud" to="$(arg pointcloud_topic)"/>
     <remap from="~imu" to="$(arg imu_topic)"/>
+    <remap from="~gnss" to="$(arg gnss_topic)"/>
 
     <!-- Publications -->
     <remap from="~odom"     to="dliom/odom_node/odom"/>

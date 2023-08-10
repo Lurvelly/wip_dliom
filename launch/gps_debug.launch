@@ -1,0 +1,5 @@
+<launch>
+  <arg name="rviz" default="true"/>
+  <node pkg="dliom" type="gps_debug_node" name="gps_debug_node" output="screen"/>
+  <node pkg="rviz" type="rviz" name="dliom_rviz" args="-d $(find dliom)/launch/debug_gps.rviz" if="$(arg rviz)"/>
+</launch>

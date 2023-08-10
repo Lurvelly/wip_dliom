@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Frames1
         - /Point Clouds1
-        - /Odometry1
       Splitter Ratio: 0.6470588445663452
     Tree Height: 784
   - Class: rviz/Selection
@@ -27,7 +26,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: Dense Map
+    SyncSource: Deskewed Scan
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -211,7 +210,7 @@ Visualization Manager:
           Axes Radius: 0.10000000149011612
           Class: rviz/PoseArray
           Color: 255; 25; 0
-          Enabled: true
+          Enabled: false
           Head Length: 0.07000000029802322
           Head Radius: 0.029999999329447746
           Name: Keyframes
@@ -221,7 +220,7 @@ Visualization Manager:
           Shape: Axes
           Topic: /robot/dliom/odom_node/keyframes
           Unreliable: false
-          Value: true
+          Value: false
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path

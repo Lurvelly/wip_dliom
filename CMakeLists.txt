@@ -17,12 +17,14 @@ set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_VERSION 17)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PCL 1.10.0 EXACT REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 find_package(GTSAM 4.0.3 EXACT REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package (GeographicLib REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
@@ -62,9 +64,6 @@ catkin_package(
     nanoflann
 )
 
-include_directories(include ${catkin_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS}) 
-include_directories(SYSTEM ${catkin_INCLUDE_DIRS})
-
 # Not all machines have <cpuid.h> available
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 file(WRITE ${CMAKE_BINARY_DIR}/test_cpuid.cpp "#include <cpuid.h>")
@@ -81,8 +80,16 @@ set(DLIOM_LIBS
     Threads::Threads 
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
+    ${GeographicLib_LIBRARIES}
     nano_gicp
 )
+
+include_directories(
+  include 
+  ${catkin_INCLUDE_DIRS} 
+  ${PCL_INCLUDE_DIRS} 
+  ${GeographicLib_INCLUDE_DIRS}
+) 
 
 # NanoFLANN
 add_library(nanoflann STATIC src/nano_gicp/nanoflann.cc)
@@ -105,6 +112,11 @@ add_executable(dliom_map_node src/dliom/map_node.cc src/dliom/map.cc)
 add_dependencies(dliom_map_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 target_link_libraries(dliom_map_node ${DLIOM_LIBS})
 target_compile_options(dliom_map_node PRIVATE -Wall -Wextra -Wpedantic)
+
+# GPS Debug Node
+add_executable(gps_debug_node src/misc/gps_debug.cc)
+target_link_libraries(gps_debug_node ${DLIOM_LIBS})
+target_compile_options(gps_debug_node PRIVATE -Wall -Wextra -Wpedantic)
 
 # Binaries
 install(TARGETS dliom_odom_node dliom_map_node
