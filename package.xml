@@ -2,13 +2,11 @@
 
 <package format="2">
 
-  <name>direct_lidar_inertial_odometry</name>
+  <name>dliom</name>
   <version>1.1.1</version>
-  <description>Direct LiDAR-Inertial Odometry: Lightweight LIO with Continuous-Time Motion Correction</description>
+  <description>Direct LiDAR-Inertial Odometry and Mapping: Perceptive and Connective SLAM</description>
 
-  <maintainer email="kennyjchen@ucla.edu">Kenny J. Chen</maintainer>
-  <maintainer email="ryguyn@ucla.edu">Ryan Nemiroff</maintainer>
-  <maintainer email="btlopez@ucla.edu">Brett T. Lopez</maintainer>
+  <maintainer email="gjulian@uos.de">Julian Gaal</maintainer>
 
   <author>Kenny J. Chen</author>
   <author>Ryan Nemiroff</author>

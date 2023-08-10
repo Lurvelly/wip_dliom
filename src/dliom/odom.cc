@@ -10,9 +10,9 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/odom.h"
+#include "dliom/odom.h"
 
-dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
+dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->getParams();
 
@@ -27,9 +27,9 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->deskew_size = 0;
 
   this->lidar_sub = this->nh.subscribe("pointcloud", 1,
-      &dlio::OdomNode::callbackPointCloud, this, ros::TransportHints().tcpNoDelay());
+      &dliom::OdomNode::callbackPointCloud, this, ros::TransportHints().tcpNoDelay());
   this->imu_sub = this->nh.subscribe("imu", 1000,
-      &dlio::OdomNode::callbackImu, this, ros::TransportHints().tcpNoDelay());
+      &dliom::OdomNode::callbackImu, this, ros::TransportHints().tcpNoDelay());
 
   this->odom_pub     = this->nh.advertise<nav_msgs::Odometry>("odom", 1, true);
   this->pose_pub     = this->nh.advertise<geometry_msgs::PoseStamped>("pose", 1, true);
@@ -38,7 +38,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->kf_cloud_pub = this->nh.advertise<sensor_msgs::PointCloud2>("kf_cloud", 1, true);
   this->deskewed_pub = this->nh.advertise<sensor_msgs::PointCloud2>("deskewed", 1, true);
 
-  this->publish_timer = this->nh.createTimer(ros::Duration(0.01), &dlio::OdomNode::publishPose, this);
+  this->publish_timer = this->nh.createTimer(ros::Duration(0.01), &dliom::OdomNode::publishPose, this);
 
   this->T = Eigen::Matrix4f::Identity();
   this->T_prior = Eigen::Matrix4f::Identity();
@@ -160,18 +160,18 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
 }
 
-dlio::OdomNode::~OdomNode() {}
+dliom::OdomNode::~OdomNode() {}
 
-void dlio::OdomNode::getParams() {
+void dliom::OdomNode::getParams() {
 
   // Version
-  ros::param::param<std::string>("~dlio/version", this->version_, "0.0.0");
+  ros::param::param<std::string>("~dliom/version", this->version_, "0.0.0");
 
   // Frames
-  ros::param::param<std::string>("~dlio/frames/odom", this->odom_frame, "odom");
-  ros::param::param<std::string>("~dlio/frames/baselink", this->baselink_frame, "base_link");
-  ros::param::param<std::string>("~dlio/frames/lidar", this->lidar_frame, "lidar");
-  ros::param::param<std::string>("~dlio/frames/imu", this->imu_frame, "imu");
+  ros::param::param<std::string>("~dliom/frames/odom", this->odom_frame, "odom");
+  ros::param::param<std::string>("~dliom/frames/baselink", this->baselink_frame, "base_link");
+  ros::param::param<std::string>("~dliom/frames/lidar", this->lidar_frame, "lidar");
+  ros::param::param<std::string>("~dliom/frames/imu", this->imu_frame, "imu");
 
   // Get Node NS and Remove Leading Character
   std::string ns = ros::this_node::getNamespace();
@@ -184,35 +184,35 @@ void dlio::OdomNode::getParams() {
   this->imu_frame = ns + "/" + this->imu_frame;
 
   // Deskew FLag
-  ros::param::param<bool>("~dlio/pointcloud/deskew", this->deskew_, true);
+  ros::param::param<bool>("~dliom/pointcloud/deskew", this->deskew_, true);
 
   // Gravity
-  ros::param::param<double>("~dlio/odom/gravity", this->gravity_, 9.80665);
+  ros::param::param<double>("~dliom/odom/gravity", this->gravity_, 9.80665);
 
   // Keyframe Threshold
-  ros::param::param<double>("~dlio/odom/keyframe/threshD", this->keyframe_thresh_dist_, 0.1);
-  ros::param::param<double>("~dlio/odom/keyframe/threshR", this->keyframe_thresh_rot_, 1.0);
+  ros::param::param<double>("~dliom/odom/keyframe/threshD", this->keyframe_thresh_dist_, 0.1);
+  ros::param::param<double>("~dliom/odom/keyframe/threshR", this->keyframe_thresh_rot_, 1.0);
 
   // Submap
-  ros::param::param<int>("~dlio/odom/submap/keyframe/knn", this->submap_knn_, 10);
-  ros::param::param<int>("~dlio/odom/submap/keyframe/kcv", this->submap_kcv_, 10);
-  ros::param::param<int>("~dlio/odom/submap/keyframe/kcc", this->submap_kcc_, 10);
+  ros::param::param<int>("~dliom/odom/submap/keyframe/knn", this->submap_knn_, 10);
+  ros::param::param<int>("~dliom/odom/submap/keyframe/kcv", this->submap_kcv_, 10);
+  ros::param::param<int>("~dliom/odom/submap/keyframe/kcc", this->submap_kcc_, 10);
 
   // Dense map resolution
-  ros::param::param<bool>("~dlio/map/dense/filtered", this->densemap_filtered_, true);
+  ros::param::param<bool>("~dliom/map/dense/filtered", this->densemap_filtered_, true);
 
   // Wait until movement to publish map
-  ros::param::param<bool>("~dlio/map/waitUntilMove", this->wait_until_move_, false);
+  ros::param::param<bool>("~dliom/map/waitUntilMove", this->wait_until_move_, false);
 
   // Crop Box Filter
-  ros::param::param<double>("~dlio/odom/preprocessing/cropBoxFilter/size", this->crop_size_, 1.0);
+  ros::param::param<double>("~dliom/odom/preprocessing/cropBoxFilter/size", this->crop_size_, 1.0);
 
   // Voxel Grid Filter
-  ros::param::param<bool>("~dlio/pointcloud/voxelize", this->vf_use_, true);
-  ros::param::param<double>("~dlio/odom/preprocessing/voxelFilter/res", this->vf_res_, 0.05);
+  ros::param::param<bool>("~dliom/pointcloud/voxelize", this->vf_use_, true);
+  ros::param::param<double>("~dliom/odom/preprocessing/voxelFilter/res", this->vf_res_, 0.05);
 
   // Adaptive Parameters
-  ros::param::param<bool>("~dlio/adaptive", this->adaptive_params_, true);
+  ros::param::param<bool>("~dliom/adaptive", this->adaptive_params_, true);
 
   // Extrinsics
   std::vector<float> t_default{0., 0., 0.};
@@ -220,8 +220,8 @@ void dlio::OdomNode::getParams() {
 
   // center of gravity to imu
   std::vector<float> baselink2imu_t, baselink2imu_R;
-  ros::param::param<std::vector<float>>("~dlio/extrinsics/baselink2imu/t", baselink2imu_t, t_default);
-  ros::param::param<std::vector<float>>("~dlio/extrinsics/baselink2imu/R", baselink2imu_R, R_default);
+  ros::param::param<std::vector<float>>("~dliom/extrinsics/baselink2imu/t", baselink2imu_t, t_default);
+  ros::param::param<std::vector<float>>("~dliom/extrinsics/baselink2imu/R", baselink2imu_R, R_default);
   this->extrinsics.baselink2imu.t =
     Eigen::Vector3f(baselink2imu_t[0], baselink2imu_t[1], baselink2imu_t[2]);
   this->extrinsics.baselink2imu.R =
@@ -233,8 +233,8 @@ void dlio::OdomNode::getParams() {
 
   // center of gravity to lidar
   std::vector<float> baselink2lidar_t, baselink2lidar_R;
-  ros::param::param<std::vector<float>>("~dlio/extrinsics/baselink2lidar/t", baselink2lidar_t, t_default);
-  ros::param::param<std::vector<float>>("~dlio/extrinsics/baselink2lidar/R", baselink2lidar_R, R_default);
+  ros::param::param<std::vector<float>>("~dliom/extrinsics/baselink2lidar/t", baselink2lidar_t, t_default);
+  ros::param::param<std::vector<float>>("~dliom/extrinsics/baselink2lidar/R", baselink2lidar_R, R_default);
 
   this->extrinsics.baselink2lidar.t =
     Eigen::Vector3f(baselink2lidar_t[0], baselink2lidar_t[1], baselink2lidar_t[2]);
@@ -246,24 +246,24 @@ void dlio::OdomNode::getParams() {
   this->extrinsics.baselink2lidar_T.block(0, 0, 3, 3) = this->extrinsics.baselink2lidar.R;
 
   // IMU
-  ros::param::param<bool>("~dlio/odom/imu/calibration/accel", this->calibrate_accel_, true);
-  ros::param::param<bool>("~dlio/odom/imu/calibration/gyro", this->calibrate_gyro_, true);
-  ros::param::param<double>("~dlio/odom/imu/calibration/time", this->imu_calib_time_, 3.0);
-  ros::param::param<int>("~dlio/odom/imu/bufferSize", this->imu_buffer_size_, 2000);
+  ros::param::param<bool>("~dliom/odom/imu/calibration/accel", this->calibrate_accel_, true);
+  ros::param::param<bool>("~dliom/odom/imu/calibration/gyro", this->calibrate_gyro_, true);
+  ros::param::param<double>("~dliom/odom/imu/calibration/time", this->imu_calib_time_, 3.0);
+  ros::param::param<int>("~dliom/odom/imu/bufferSize", this->imu_buffer_size_, 2000);
 
   std::vector<float> accel_default{0., 0., 0.}; std::vector<float> prior_accel_bias;
   std::vector<float> gyro_default{0., 0., 0.}; std::vector<float> prior_gyro_bias;
 
-  ros::param::param<bool>("~dlio/odom/imu/approximateGravity", this->gravity_align_, true);
-  ros::param::param<bool>("~dlio/imu/calibration", this->imu_calibrate_, true);
-  ros::param::param<std::vector<float>>("~dlio/imu/intrinsics/accel/bias", prior_accel_bias, accel_default);
-  ros::param::param<std::vector<float>>("~dlio/imu/intrinsics/gyro/bias", prior_gyro_bias, gyro_default);
+  ros::param::param<bool>("~dliom/odom/imu/approximateGravity", this->gravity_align_, true);
+  ros::param::param<bool>("~dliom/imu/calibration", this->imu_calibrate_, true);
+  ros::param::param<std::vector<float>>("~dliom/imu/intrinsics/accel/bias", prior_accel_bias, accel_default);
+  ros::param::param<std::vector<float>>("~dliom/imu/intrinsics/gyro/bias", prior_gyro_bias, gyro_default);
 
   // scale-misalignment matrix
   std::vector<float> imu_sm_default{1., 0., 0., 0., 1., 0., 0., 0., 1.};
   std::vector<float> imu_sm;
 
-  ros::param::param<std::vector<float>>("~dlio/imu/intrinsics/accel/sm", imu_sm, imu_sm_default);
+  ros::param::param<std::vector<float>>("~dliom/imu/intrinsics/accel/sm", imu_sm, imu_sm_default);
 
   if (!this->imu_calibrate_) {
     this->state.b.accel[0] = prior_accel_bias[0];
@@ -280,28 +280,28 @@ void dlio::OdomNode::getParams() {
   }
 
   // GICP
-  ros::param::param<int>("~dlio/odom/gicp/minNumPoints", this->gicp_min_num_points_, 100);
-  ros::param::param<int>("~dlio/odom/gicp/kCorrespondences", this->gicp_k_correspondences_, 20);
-  ros::param::param<double>("~dlio/odom/gicp/maxCorrespondenceDistance", this->gicp_max_corr_dist_,
+  ros::param::param<int>("~dliom/odom/gicp/minNumPoints", this->gicp_min_num_points_, 100);
+  ros::param::param<int>("~dliom/odom/gicp/kCorrespondences", this->gicp_k_correspondences_, 20);
+  ros::param::param<double>("~dliom/odom/gicp/maxCorrespondenceDistance", this->gicp_max_corr_dist_,
       std::sqrt(std::numeric_limits<double>::max()));
-  ros::param::param<int>("~dlio/odom/gicp/maxIterations", this->gicp_max_iter_, 64);
-  ros::param::param<double>("~dlio/odom/gicp/transformationEpsilon", this->gicp_transformation_ep_, 0.0005);
-  ros::param::param<double>("~dlio/odom/gicp/rotationEpsilon", this->gicp_rotation_ep_, 0.0005);
-  ros::param::param<double>("~dlio/odom/gicp/initLambdaFactor", this->gicp_init_lambda_factor_, 1e-9);
+  ros::param::param<int>("~dliom/odom/gicp/maxIterations", this->gicp_max_iter_, 64);
+  ros::param::param<double>("~dliom/odom/gicp/transformationEpsilon", this->gicp_transformation_ep_, 0.0005);
+  ros::param::param<double>("~dliom/odom/gicp/rotationEpsilon", this->gicp_rotation_ep_, 0.0005);
+  ros::param::param<double>("~dliom/odom/gicp/initLambdaFactor", this->gicp_init_lambda_factor_, 1e-9);
 
   // Geometric Observer
-  ros::param::param<double>("~dlio/odom/geo/Kp", this->geo_Kp_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/Kv", this->geo_Kv_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/Kq", this->geo_Kq_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/Kab", this->geo_Kab_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/Kgb", this->geo_Kgb_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/abias_max", this->geo_abias_max_, 1.0);
-  ros::param::param<double>("~dlio/odom/geo/gbias_max", this->geo_gbias_max_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/Kp", this->geo_Kp_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/Kv", this->geo_Kv_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/Kq", this->geo_Kq_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/Kab", this->geo_Kab_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/Kgb", this->geo_Kgb_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/abias_max", this->geo_abias_max_, 1.0);
+  ros::param::param<double>("~dliom/odom/geo/gbias_max", this->geo_gbias_max_, 1.0);
 
 
 }
 
-void dlio::OdomNode::start() {
+void dliom::OdomNode::start() {
 
   printf("\033[2J\033[1;1H");
   std::cout << std::endl
@@ -312,7 +312,7 @@ void dlio::OdomNode::start() {
 
 }
 
-void dlio::OdomNode::publishPose(const ros::TimerEvent& e) {
+void dliom::OdomNode::publishPose(const ros::TimerEvent& e) {
 
   // nav_msgs::Odometry
   this->odom_ros.header.stamp = this->imu_stamp;
@@ -355,7 +355,7 @@ void dlio::OdomNode::publishPose(const ros::TimerEvent& e) {
 
 }
 
-void dlio::OdomNode::publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
+void dliom::OdomNode::publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
   this->publishCloud(published_cloud, T_cloud);
 
   // nav_msgs::Path
@@ -431,7 +431,7 @@ void dlio::OdomNode::publishToROS(pcl::PointCloud<PointType>::ConstPtr published
 
 }
 
-void dlio::OdomNode::publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
+void dliom::OdomNode::publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
 
   if (this->wait_until_move_) {
     if (this->length_traversed < 0.1) { return; }
@@ -450,7 +450,7 @@ void dlio::OdomNode::publishCloud(pcl::PointCloud<PointType>::ConstPtr published
 
 }
 
-void dlio::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp) {
+void dliom::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp) {
 
   // Push back
   geometry_msgs::Pose p;
@@ -487,7 +487,7 @@ void dlio::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen:
 
 }
 
-void dlio::OdomNode::getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc) {
+void dliom::OdomNode::getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc) {
 
   pcl::PointCloud<PointType>::Ptr original_scan_ (boost::make_shared<pcl::PointCloud<PointType>>());
   pcl::fromROSMsg(*pc, *original_scan_);
@@ -502,21 +502,21 @@ void dlio::OdomNode::getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc) 
   this->crop.filter(*original_scan_);
 
   // automatically detect sensor type
-  this->sensor = dlio::SensorType::UNKNOWN;
+  this->sensor = dliom::SensorType::UNKNOWN;
   for (auto &field : pc->fields) {
     if (field.name == "t") {
-      this->sensor = dlio::SensorType::OUSTER;
+      this->sensor = dliom::SensorType::OUSTER;
       break;
     } else if (field.name == "time") {
-      this->sensor = dlio::SensorType::VELODYNE;
+      this->sensor = dliom::SensorType::VELODYNE;
       break;
     } else if (field.name == "timestamp") {
-      this->sensor = dlio::SensorType::HESAI;
+      this->sensor = dliom::SensorType::HESAI;
       break;
     }
   }
 
-  if (this->sensor == dlio::SensorType::UNKNOWN) {
+  if (this->sensor == dliom::SensorType::UNKNOWN) {
     this->deskew_ = false;
   }
 
@@ -525,7 +525,7 @@ void dlio::OdomNode::getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc) 
 
 }
 
-void dlio::OdomNode::preprocessPoints() {
+void dliom::OdomNode::preprocessPoints() {
 
   // Deskew the original dlio-type scan
   if (this->deskew_) {
@@ -585,7 +585,7 @@ void dlio::OdomNode::preprocessPoints() {
 
 }
 
-void dlio::OdomNode::deskewPointcloud() {
+void dliom::OdomNode::deskewPointcloud() {
 
   pcl::PointCloud<PointType>::Ptr deskewed_scan_ (boost::make_shared<pcl::PointCloud<PointType>>());
   deskewed_scan_->points.resize(this->original_scan->points.size());
@@ -599,7 +599,7 @@ void dlio::OdomNode::deskewPointcloud() {
                      boost::range::index_value<PointType&, long>)> point_time_neq;
   std::function<double(boost::range::index_value<PointType&, long>)> extract_point_time;
 
-  if (this->sensor == dlio::SensorType::OUSTER) {
+  if (this->sensor == dliom::SensorType::OUSTER) {
 
     point_time_cmp = [](const PointType& p1, const PointType& p2)
       { return p1.t < p2.t; };
@@ -609,7 +609,7 @@ void dlio::OdomNode::deskewPointcloud() {
     extract_point_time = [&sweep_ref_time](boost::range::index_value<PointType&, long> pt)
       { return sweep_ref_time + pt.value().t * 1e-9f; };
 
-  } else if (this->sensor == dlio::SensorType::VELODYNE) {
+  } else if (this->sensor == dliom::SensorType::VELODYNE) {
 
     point_time_cmp = [](const PointType& p1, const PointType& p2)
       { return p1.time < p2.time; };
@@ -619,7 +619,7 @@ void dlio::OdomNode::deskewPointcloud() {
     extract_point_time = [&sweep_ref_time](boost::range::index_value<PointType&, long> pt)
       { return sweep_ref_time + pt.value().time; };
 
-  } else if (this->sensor == dlio::SensorType::HESAI) {
+  } else if (this->sensor == dliom::SensorType::HESAI) {
 
     point_time_cmp = [](const PointType& p1, const PointType& p2)
       { return p1.timestamp < p2.timestamp; };
@@ -705,7 +705,7 @@ void dlio::OdomNode::deskewPointcloud() {
 
 }
 
-void dlio::OdomNode::initializeInputTarget() {
+void dliom::OdomNode::initializeInputTarget() {
 
   this->prev_scan_stamp = this->scan_stamp;
 
@@ -717,12 +717,12 @@ void dlio::OdomNode::initializeInputTarget() {
 
 }
 
-void dlio::OdomNode::setInputSource() {
+void dliom::OdomNode::setInputSource() {
   this->gicp.setInputSource(this->current_scan);
   this->gicp.calculateSourceCovariances();
 }
 
-void dlio::OdomNode::initializeDLIO() {
+void dliom::OdomNode::initializeDLIO() {
 
   // Wait for IMU
   if (!this->first_imu_received || !this->imu_calibrated) {
@@ -734,7 +734,7 @@ void dlio::OdomNode::initializeDLIO() {
 
 }
 
-void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc) {
+void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc) {
 
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(main_loop_running_mutex);
   this->main_loop_running = true;
@@ -767,7 +767,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
   }
 
   // Compute Metrics
-  this->metrics_thread = std::thread( &dlio::OdomNode::computeMetrics, this );
+  this->metrics_thread = std::thread( &dliom::OdomNode::computeMetrics, this );
   this->metrics_thread.detach();
 
   // Set Adaptive Parameters
@@ -783,7 +783,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
     this->initializeInputTarget();
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dlio::OdomNode::buildKeyframesAndSubmap, this, this->state );
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state );
     this->submap_future.wait(); // wait until completion
     return;
   }
@@ -798,7 +798,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
   if (this->new_submap_is_ready) {
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dlio::OdomNode::buildKeyframesAndSubmap, this, this->state );
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state );
   } else {
     lock.lock();
     this->main_loop_running = false;
@@ -821,7 +821,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
   } else {
     published_cloud = this->deskewed_scan;
   }
-  this->publish_thread = std::thread( &dlio::OdomNode::publishToROS, this, published_cloud, this->T_corr );
+  this->publish_thread = std::thread( &dliom::OdomNode::publishToROS, this, published_cloud, this->T_corr );
   this->publish_thread.detach();
 
   // Update some statistics
@@ -829,14 +829,14 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
   this->gicp_hasConverged = this->gicp.hasConverged();
 
   // Debug statements and publish custom DLIO message
-  this->debug_thread = std::thread( &dlio::OdomNode::debug, this );
+  this->debug_thread = std::thread( &dliom::OdomNode::debug, this );
   this->debug_thread.detach();
 
   this->geo.first_opt_done = true;
 
 }
 
-void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
+void dliom::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
 
   this->first_imu_received = true;
 
@@ -981,7 +981,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
 
 }
 
-void dlio::OdomNode::getNextPose() {
+void dliom::OdomNode::getNextPose() {
 
   // Check if the new submap is ready to be used
   this->new_submap_is_ready = (this->submap_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
@@ -1017,7 +1017,7 @@ void dlio::OdomNode::getNextPose() {
 
 }
 
-bool dlio::OdomNode::imuMeasFromTimeRange(double start_time, double end_time,
+bool dliom::OdomNode::imuMeasFromTimeRange(double start_time, double end_time,
                                           boost::circular_buffer<ImuMeas>::reverse_iterator& begin_imu_it,
                                           boost::circular_buffer<ImuMeas>::reverse_iterator& end_imu_it) {
 
@@ -1054,7 +1054,7 @@ bool dlio::OdomNode::imuMeasFromTimeRange(double start_time, double end_time,
 }
 
 std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
-dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init, Eigen::Vector3f p_init,
+dliom::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init, Eigen::Vector3f p_init,
                              Eigen::Vector3f v_init, const std::vector<double>& sorted_timestamps) {
 
   const std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> empty;
@@ -1130,7 +1130,7 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init, Eigen
 }
 
 std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
-dlio::OdomNode::integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
+dliom::OdomNode::integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
                                      const std::vector<double>& sorted_timestamps,
                                      boost::circular_buffer<ImuMeas>::reverse_iterator begin_imu_it,
                                      boost::circular_buffer<ImuMeas>::reverse_iterator end_imu_it) {
@@ -1227,7 +1227,7 @@ dlio::OdomNode::integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f 
 
 }
 
-void dlio::OdomNode::propagateGICP() {
+void dliom::OdomNode::propagateGICP() {
 
   this->lidarPose.p << this->T(0,3), this->T(1,3), this->T(2,3);
 
@@ -1245,7 +1245,7 @@ void dlio::OdomNode::propagateGICP() {
 
 }
 
-void dlio::OdomNode::propagateState() {
+void dliom::OdomNode::propagateState() {
 
   // Lock thread to prevent state from being accessed by UpdateState
   std::lock_guard<std::mutex> lock( this->geo.mtx );
@@ -1283,7 +1283,7 @@ void dlio::OdomNode::propagateState() {
 
 }
 
-void dlio::OdomNode::updateState() {
+void dliom::OdomNode::updateState() {
 
   // Lock thread to prevent state from being accessed by PropagateState
   std::lock_guard<std::mutex> lock( this->geo.mtx );
@@ -1343,7 +1343,7 @@ void dlio::OdomNode::updateState() {
 
 }
 
-sensor_msgs::Imu::Ptr dlio::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
+sensor_msgs::Imu::Ptr dliom::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
 
   sensor_msgs::Imu::Ptr imu (new sensor_msgs::Imu);
 
@@ -1390,12 +1390,12 @@ sensor_msgs::Imu::Ptr dlio::OdomNode::transformImu(const sensor_msgs::Imu::Const
 
 }
 
-void dlio::OdomNode::computeMetrics() {
+void dliom::OdomNode::computeMetrics() {
   this->computeSpaciousness();
   this->computeDensity();
 }
 
-void dlio::OdomNode::computeSpaciousness() {
+void dliom::OdomNode::computeSpaciousness() {
 
   // compute range of points
   std::vector<float> ds;
@@ -1418,7 +1418,7 @@ void dlio::OdomNode::computeSpaciousness() {
 
 }
 
-void dlio::OdomNode::computeDensity() {
+void dliom::OdomNode::computeDensity() {
 
   float density;
 
@@ -1436,7 +1436,7 @@ void dlio::OdomNode::computeDensity() {
 
 }
 
-void dlio::OdomNode::computeConvexHull() {
+void dliom::OdomNode::computeConvexHull() {
 
   // at least 4 keyframes for convex hull
   if (this->num_processed_keyframes < 4) {
@@ -1475,7 +1475,7 @@ void dlio::OdomNode::computeConvexHull() {
 
 }
 
-void dlio::OdomNode::computeConcaveHull() {
+void dliom::OdomNode::computeConcaveHull() {
 
   // at least 5 keyframes for concave hull
   if (this->num_processed_keyframes < 5) {
@@ -1514,7 +1514,7 @@ void dlio::OdomNode::computeConcaveHull() {
 
 }
 
-void dlio::OdomNode::updateKeyframes() {
+void dliom::OdomNode::updateKeyframes() {
 
   // calculate difference in pose and rotation to all poses in trajectory
   float closest_d = std::numeric_limits<float>::infinity();
@@ -1597,7 +1597,7 @@ void dlio::OdomNode::updateKeyframes() {
 
 }
 
-void dlio::OdomNode::setAdaptiveParams() {
+void dliom::OdomNode::setAdaptiveParams() {
 
   // Spaciousness
   float sp = this->metrics.spaciousness.back();
@@ -1623,7 +1623,7 @@ void dlio::OdomNode::setAdaptiveParams() {
 
 }
 
-void dlio::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames) {
+void dliom::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames) {
 
   // make sure dists is not empty
   if (!dists.size()) { return; }
@@ -1651,7 +1651,7 @@ void dlio::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::vec
 
 }
 
-void dlio::OdomNode::buildSubmap(State vehicle_state) {
+void dliom::OdomNode::buildSubmap(State vehicle_state) {
 
   // clear vector of keyframe indices to use for submap
   this->submap_kf_idx_curr.clear();
@@ -1742,7 +1742,7 @@ void dlio::OdomNode::buildSubmap(State vehicle_state) {
   }
 }
 
-void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
+void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
   // transform the new keyframe(s) and associated covariance list(s)
     std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
@@ -1768,7 +1768,7 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
     this->keyframes[i].second = transformed_keyframe;
     this->keyframe_normals[i] = transformed_covariances;
 
-    this->publish_keyframe_thread = std::thread( &dlio::OdomNode::publishKeyframe, this, this->keyframes[i], this->keyframe_timestamps[i] );
+    this->publish_keyframe_thread = std::thread( &dliom::OdomNode::publishKeyframe, this, this->keyframes[i], this->keyframe_timestamps[i] );
     this->publish_keyframe_thread.detach();
   }
 
@@ -1780,12 +1780,12 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
   this->buildSubmap(vehicle_state);
 }
 
-void dlio::OdomNode::pauseSubmapBuildIfNeeded() {
+void dliom::OdomNode::pauseSubmapBuildIfNeeded() {
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(this->main_loop_running_mutex);
   this->submap_build_cv.wait(lock, [this]{ return !this->main_loop_running; });
 }
 
-void dlio::OdomNode::debug() {
+void dliom::OdomNode::debug() {
 
   // Total length traversed
   double length_traversed = 0.;
@@ -1891,17 +1891,17 @@ void dlio::OdomNode::debug() {
       << "|" << std::endl;
   }
 
-  if (this->sensor == dlio::SensorType::OUSTER) {
+  if (this->sensor == dliom::SensorType::OUSTER) {
     std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
       << "Sensor Rates: Ouster @ " + to_string_with_precision(avg_lidar_rate, 2)
                                    + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
       << "|" << std::endl;
-  } else if (this->sensor == dlio::SensorType::VELODYNE) {
+  } else if (this->sensor == dliom::SensorType::VELODYNE) {
     std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
       << "Sensor Rates: Velodyne @ " + to_string_with_precision(avg_lidar_rate, 2)
                                      + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
       << "|" << std::endl;
-  } else if (this->sensor == dlio::SensorType::HESAI) {
+  } else if (this->sensor == dliom::SensorType::HESAI) {
     std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
       << "Sensor Rates: Hesai @ " + to_string_with_precision(avg_lidar_rate, 2)
                                   + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"

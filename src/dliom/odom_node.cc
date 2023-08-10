@@ -10,19 +10,18 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/map.h"
+#include "dliom/odom.h"
 
 int main(int argc, char** argv) {
 
-  ros::init(argc, argv, "dlio_map_node");
+  ros::init(argc, argv, "dliom_odom_node");
   ros::NodeHandle nh("~");
 
-  dlio::MapNode node(nh);
+  dliom::OdomNode node(nh);
   ros::AsyncSpinner spinner(0);
   spinner.start();
   node.start();
   ros::waitForShutdown();
 
   return 0;
-
 }

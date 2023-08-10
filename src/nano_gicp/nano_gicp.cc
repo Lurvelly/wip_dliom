@@ -42,7 +42,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *************************************************************************/
 
-#include "dlio/dlio.h"
+#include "dliom/dliom.h"
 #include "nano_gicp/nano_gicp.h"
 
 template class nano_gicp::NanoGICP<PointType, PointType>;

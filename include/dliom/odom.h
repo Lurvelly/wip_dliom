@@ -10,9 +10,9 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/dlio.h"
+#include "dliom/dliom.h"
 
-class dlio::OdomNode {
+class dliom::OdomNode {
 
 public:
 
@@ -132,7 +132,7 @@ private:
   std::mutex keyframes_mutex;
 
   // Sensor Type
-  dlio::SensorType sensor;
+  dliom::SensorType sensor;
 
   // Frames
   std::string odom_frame;

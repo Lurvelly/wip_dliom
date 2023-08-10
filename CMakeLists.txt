@@ -11,31 +11,18 @@
 ###########################################################
 
 cmake_minimum_required(VERSION 3.12.4)
-project(direct_lidar_inertial_odometry)
+project(dliom)
 
-add_compile_options(-std=c++14)
-set(CMAKE_BUILD_TYPE "Release")
-
-find_package( PCL REQUIRED )
-include_directories(${PCL_INCLUDE_DIRS})
-add_definitions(${PCL_DEFINITIONS})
-link_directories(${PCL_LIBRARY_DIRS})
-
-find_package( Eigen3 REQUIRED )
-include_directories(${EIGEN3_INCLUDE_DIR})
-
-include(FindOpenMP)
-if(OPENMP_FOUND)
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-else(OPENMP_FOUND)
-  message("ERROR: OpenMP could not be found.")
-endif(OPENMP_FOUND)
-
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CXX_VERSION 17)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+
+find_package(PCL 1.10.0 EXACT REQUIRED)
+find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
+find_package(GTSAM 4.0.3 EXACT REQUIRED)
+find_package(OpenMP REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
@@ -75,7 +62,7 @@ catkin_package(
     nanoflann
 )
 
-include_directories(include)
+include_directories(include ${catkin_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS}) 
 include_directories(SYSTEM ${catkin_INCLUDE_DIRS})
 
 # Not all machines have <cpuid.h> available
@@ -87,33 +74,40 @@ if(HAS_CPUID)
   add_compile_definitions(HAS_CPUID)
 endif()
 
-# NanoFLANN
-add_library(nanoflann STATIC
-  src/nano_gicp/nanoflann.cc
+set(DLIOM_LIBS
+    ${catkin_LIBRARIES} 
+    ${PCL_LIBRARIES} 
+    ${OpenMP_LIBS} 
+    Threads::Threads 
+    Eigen3::Eigen
+    OpenMP::OpenMP_CXX
+    nano_gicp
 )
+
+# NanoFLANN
+add_library(nanoflann STATIC src/nano_gicp/nanoflann.cc)
 target_link_libraries(nanoflann ${PCL_LIBRARIES})
+target_compile_options(nanoflann PRIVATE -Wall -Wextra -Wpedantic)
 
 # NanoGICP
-add_library(nano_gicp STATIC
-  src/nano_gicp/lsq_registration.cc
-  src/nano_gicp/nano_gicp.cc
-)
-target_link_libraries(nano_gicp ${PCL_LIBRARIES} ${OpenMP_LIBS} nanoflann)
+add_library(nano_gicp STATIC src/nano_gicp/lsq_registration.cc src/nano_gicp/nano_gicp.cc)
+target_link_libraries(nano_gicp ${PCL_LIBRARIES} OpenMP::OpenMP_CXX nanoflann)
+target_compile_options(nano_gicp PRIVATE -Wall -Wextra -Wpedantic)
 
 # Odometry Node
-add_executable(dlio_odom_node src/dlio/odom_node.cc src/dlio/odom.cc)
-add_dependencies(dlio_odom_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-target_compile_options(dlio_odom_node PRIVATE ${OpenMP_FLAGS})
-target_link_libraries(dlio_odom_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} Threads::Threads nano_gicp)
+add_executable(dliom_odom_node src/dliom/odom_node.cc src/dliom/odom.cc)
+add_dependencies(dliom_odom_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(dliom_odom_node ${DLIOM_LIBS})
+target_compile_options(dliom_odom_node PRIVATE -Wall -Wextra -Wpedantic)
 
 # Mapping Node
-add_executable (dlio_map_node src/dlio/map_node.cc src/dlio/map.cc)
-add_dependencies(dlio_map_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-target_compile_options(dlio_map_node PRIVATE ${OpenMP_FLAGS})
-target_link_libraries(dlio_map_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} Threads::Threads)
+add_executable(dliom_map_node src/dliom/map_node.cc src/dliom/map.cc)
+add_dependencies(dliom_map_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(dliom_map_node ${DLIOM_LIBS})
+target_compile_options(dliom_map_node PRIVATE -Wall -Wextra -Wpedantic)
 
 # Binaries
-install( TARGETS dlio_odom_node dlio_map_node
-         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} )
-install( DIRECTORY cfg launch
-         DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION} )
+install(TARGETS dliom_odom_node dliom_map_node
+        DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} )
+install(DIRECTORY cfg launch
+        DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION} )
