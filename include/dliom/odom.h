@@ -44,6 +44,7 @@ private:
   void preprocessPoints();
   void deskewPointcloud();
   void initializeInputTarget();
+  void initializeKeyframesAndGraph();
   void setInputSource();
 
   void initializeDLIO();
@@ -74,11 +75,14 @@ private:
 
   sensor_msgs::Imu::Ptr transformImu(const sensor_msgs::Imu::ConstPtr& imu);
 
-  void updateKeyframes();
+  bool newKeyframe();
   void computeConvexHull();
   void computeConcaveHull();
   void pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames);
+  void correctPoses();
   void buildSubmap(State vehicle_state);
+  void updateKeyframesAndGraph();
+  void updateKeyframes();
   void buildKeyframesAndSubmap(State vehicle_state);
   void pauseSubmapBuildIfNeeded();
 
@@ -97,6 +101,7 @@ private:
   ros::Publisher pose_pub;
   ros::Publisher path_pub;
   ros::Publisher kf_pose_pub;
+  ros::Publisher global_kf_pose_pub;
   ros::Publisher kf_cloud_pub;
   ros::Publisher deskewed_pub;
 
@@ -105,6 +110,7 @@ private:
   geometry_msgs::PoseStamped pose_ros;
   nav_msgs::Path path_ros;
   geometry_msgs::PoseArray kf_pose_ros;
+  geometry_msgs::PoseArray global_kf_pose_ros;
 
   // Flags
   std::atomic<bool> dlio_initialized;
@@ -129,11 +135,19 @@ private:
   // Keyframes
   std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
                         pcl::PointCloud<PointType>::ConstPtr>> keyframes;
+  std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
+                        pcl::PointCloud<PointType>::ConstPtr>> global_keyframes;
   std::vector<ros::Time> keyframe_timestamps;
+  std::vector<ros::Time> global_keyframe_timestamps;
   std::vector<std::shared_ptr<const nano_gicp::CovarianceList>> keyframe_normals;
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> keyframe_transformations;
   int closest_idx;
   std::mutex keyframes_mutex;
+
+  // Factors
+  void addOdomFactor();
+  void addGNSSFactor();
+  gtsam::Pose3 state2gtsam(const Eigen::Vector3f &pos, Eigen::Quaternionf rot);
 
   // Sensor Type
   dliom::SensorType sensor;
@@ -247,6 +261,7 @@ private:
   bool matchGNSSWithKf(GNSSMeas& meas);
   std::atomic<double> avg_gnss_rate;
   std::vector<double> gnss_rates;
+  bool gnss_aligned;
 
   // Geometric Observer
   struct Geo {
@@ -257,7 +272,7 @@ private:
     Eigen::Vector3f prev_p;
     Eigen::Quaternionf prev_q;
     Eigen::Vector3f prev_vel;
-  }; Geo geo;
+  } geo;
 
   // State Vector
   struct ImuBias {
@@ -280,7 +295,7 @@ private:
     Eigen::Quaternionf q; // orientation in world frame
     Velocity v;
     ImuBias b; // imu biases in body frame
-  }; State state;
+  } state;
 
   struct Pose {
     Eigen::Vector3f p; // position in world frame
@@ -293,12 +308,19 @@ private:
   struct Metrics {
     std::vector<float> spaciousness;
     std::vector<float> density;
-  }; Metrics metrics;
+  } metrics;
 
   std::string cpu_type;
   std::vector<double> cpu_percents;
   clock_t lastCPU, lastSysCPU, lastUserCPU;
   int numProcessors;
+
+  // GTSAM
+  bool is_loop;
+  int n_factor;
+  gtsam::NonlinearFactorGraph graph;
+  gtsam::Values estimate;
+  gtsam::ISAM2 optimizer;
 
   // Parameters
   std::string version_;

@@ -14,6 +14,7 @@
 
   <arg name="robot_namespace" default="robot"/>
   <arg name="rviz" default="false"/>
+  <arg name="debug" default="false"/>
 
   <arg name="pointcloud_topic" default="lidar"/>
   <arg name="imu_topic" default="imu"/>
@@ -57,5 +58,8 @@
 
   <!-- RViz -->
   <node pkg="rviz" type="rviz" name="dliom_rviz" args="-d $(find dliom)/launch/dliom.rviz" if="$(arg rviz)"/>
+
+  <!-- Debug -->
+  <node name="set_logger_level_node" pkg="rosservice" type="rosservice" args="call /robot/dliom_odom/set_logger_level ros.dliom DEBUG" output="screen" if="$(arg debug)"/>
 
 </launch>

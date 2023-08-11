@@ -13,6 +13,11 @@ This repo implements [DLIOM](https://arxiv.org/abs/2305.01843), based on DLIO [[
 ### Backend
 
 * [ ] GPS factor
+    * [x] matched with keyframes in case of new
+    * [ ] matched with any keyframe at any time
+* [ ] Odom factor
+    * [x] Keyframes Sequential
+    * [ ] Similarity constraints
 * [ ] Sequential factor
 * [ ] Jaccard similitarity constraint
 * [ ] Gravity factor

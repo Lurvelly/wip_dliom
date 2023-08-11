@@ -24,7 +24,7 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 find_package(GTSAM 4.0.3 EXACT REQUIRED)
 find_package(OpenMP REQUIRED)
-find_package (GeographicLib REQUIRED)
+find_package(GeographicLib REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
@@ -80,6 +80,7 @@ set(DLIOM_LIBS
     Threads::Threads 
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
+    gtsam
     ${GeographicLib_LIBRARIES}
     nano_gicp
 )
