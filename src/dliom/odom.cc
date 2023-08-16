@@ -15,10 +15,10 @@
 dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   gtsam::ISAM2Params params;
-  params.relinearizeThreshold = 0.01;
+  params.relinearizeThreshold = 0.1;
   params.relinearizeSkip = 1;
-  this->n_factor = 0;
   this->optimizer = gtsam::ISAM2(params);
+  this->n_factor = 0;
 
   this->getParams();
 
@@ -314,7 +314,9 @@ void dliom::OdomNode::getParams() {
   ros::param::param<double>("~dliom/odom/geo/abias_max", this->geo_abias_max_, 1.0);
   ros::param::param<double>("~dliom/odom/geo/gbias_max", this->geo_gbias_max_, 1.0);
 
-
+  // GNSS
+  ros::param::param<int>("~dliom/gnss/alignmentThreshold", this->alignment_threshold_, 25);
+  ros::param::param<double>("~dliom/gnss/threshCov", this->thresh_cov_, 0.5);
 }
 
 void dliom::OdomNode::start() {
@@ -483,9 +485,6 @@ void dliom::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen
   this->kf_pose_ros.header.stamp = timestamp;
   this->kf_pose_ros.header.frame_id = this->odom_frame;
   this->kf_pose_pub.publish(this->kf_pose_ros);
-  this->global_kf_pose_ros.header.stamp = timestamp;
-  this->global_kf_pose_ros.header.frame_id = this->odom_frame;
-  this->global_kf_pose_pub.publish(this->global_kf_pose_ros);
 
   // publish keyframe scan for map
   if (this->vf_use_) {
@@ -733,8 +732,9 @@ void dliom::OdomNode::initializeInputTarget() {
   this->keyframe_timestamps.push_back(this->scan_header_stamp);
   this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
   this->keyframe_transformations.push_back(this->T_corr);
+   ROS_DEBUG("Added first keyframe: %.1f %.1f %.1f", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
 
-  // this->initializeKeyframesAndGraph();
+  this->initializeKeyframesAndGraph();
 }
 
 void dliom::OdomNode::setInputSource() {
@@ -1052,7 +1052,7 @@ bool dliom::OdomNode::matchGNSSWithKf(GNSSMeas& meas) {
     auto closest_kf_time = keyframe_timestamps[this->closest_idx];
 
     double time_diff = std::abs(meas.time - closest_kf_time.toSec());
-    if (time_diff < time_diff_threshold)
+    if (time_diff < time_diff_threshold && std::abs(meas.cov.x()) < this->thresh_cov_ && std::abs(meas.cov.y()) < this->thresh_cov_)
     {
       time_diff_threshold = time_diff;
       meas.kf_id_match = this->closest_idx;
@@ -1758,7 +1758,13 @@ void dliom::OdomNode::updateKeyframes() {
 
 void dliom::OdomNode::updateKeyframesAndGraph() {
   if (this->newKeyframe()) {
-    //ROS_DEBUG("New keyframe");
+   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+   this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+   ROS_DEBUG("Adding keyframe: (%.1f,%.1f,%.1f)", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
+   this->keyframe_timestamps.push_back(this->scan_header_stamp);
+   this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
+   this->keyframe_transformations.push_back(this->T_corr);
+   lock.unlock();
     this->addOdomFactor();
     //ROS_DEBUG("Added Odom Factor");
     this->addGNSSFactor();
@@ -1767,9 +1773,13 @@ void dliom::OdomNode::updateKeyframesAndGraph() {
     this->optimizer.update(this->graph, this->estimate);
     this->optimizer.update();
     //
-    if (this->is_loop)
+    if (this->is_loop && this->gnss_aligned)
     {
         this->optimizer.update();
+        // this->optimizer.update();
+        // this->optimizer.update();
+        // this->optimizer.update();
+        // this->optimizer.update();
     }
     //     this->optimizer.update();
     //     this->optimizer.update();
@@ -1777,15 +1787,16 @@ void dliom::OdomNode::updateKeyframesAndGraph() {
     //
     this->graph.resize(0);
     this->estimate.clear();
+    this->optimized_estimate = this->optimizer.calculateEstimate();
 
-    // this->correctPoses();
+    this->correctPoses();
 
-    std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-    this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
-    this->keyframe_timestamps.push_back(this->scan_header_stamp);
-    this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
-    this->keyframe_transformations.push_back(this->T_corr);
-    lock.unlock();
+    // std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+    // this->keyframes.push_back(std::make_pair(sddtd::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+    // this->keyframe_timestamps.push_back(this->scan_header_stamp);
+    // this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
+    // this->keyframe_transformations.push_back(this->T_corr);
+    // lock.unlock();
   }
 }
 
@@ -1806,9 +1817,9 @@ void dliom::OdomNode::addGNSSFactor() {
   gnss_buffer.clear();
   lock_gps.unlock();
 
-  if (gnss_init_factors.size() < 5) {
+  if (gnss_init_factors.size() < this->alignment_threshold_) {
     gnss_init_factors.emplace_back(latest_gnss);
-    ROS_DEBUG("Add GNSS Preoptimization %ld", gnss_init_factors.size());
+    ROS_DEBUG("Add GNSS Preoptimization %ld / %d", gnss_init_factors.size(), this->alignment_threshold_);
     return;
   }
     
@@ -1820,7 +1831,7 @@ void dliom::OdomNode::addGNSSFactor() {
       this->graph.add(gps_factor);
     }
     ROS_DEBUG("Aligned GNSS");
-    gnss_aligned = true;
+    this->gnss_aligned = true;
   } else {
     auto variance = (gtsam::Vector(3) << latest_gnss.cov.x(), latest_gnss.cov.y(), latest_gnss.cov.z()).finished(); 
     auto noise = gtsam::noiseModel::Diagonal::Variances(variance);
@@ -1829,21 +1840,23 @@ void dliom::OdomNode::addGNSSFactor() {
     this->graph.add(gps_factor);
     ROS_DEBUG("Add GPS Factor");
   }
+
+  this->is_loop = true;
 }
 
 void dliom::OdomNode::addOdomFactor() {
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-  static auto current_kf = this->keyframes.back();
-  ROS_DEBUG("%ld %d", this->keyframes.size(), this->n_factor);
+  auto current_kf = this->keyframes.back();
   lock.unlock();
   static auto last_kf = std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, pcl::PointCloud<PointType>::ConstPtr>{};
   
   if (this->n_factor == 0) {
-    auto variance = (gtsam::Vector(6) << 1e-2, 1e-2, M_PI * M_PI, 1e8, 1e8, 1e8).finished();
+    auto variance = (gtsam::Vector(6) << 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12).finished();
     gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
-    this->graph.addPrior(0, state2gtsam(current_kf.first.first, current_kf.first.second), noise);
-    this->estimate.insert(0, state2gtsam(current_kf.first.first, current_kf.first.second));
-    ROS_DEBUG("Add Odomfactor: 0");
+    auto pose = state2gtsam(current_kf.first.first, current_kf.first.second); 
+    this->graph.addPrior(0, pose, noise);
+    this->estimate.insert(0, pose);
+    ROS_DEBUG("Add Odomfactor: 0 %.1f %.1f %.1f", current_kf.first.first.x(), current_kf.first.first.y(), current_kf.first.first.z());
   } else {
     auto pose_to = state2gtsam(current_kf.first.first, current_kf.first.second);
     auto pose_from = state2gtsam(last_kf.first.first, last_kf.first.second);
@@ -1851,7 +1864,12 @@ void dliom::OdomNode::addOdomFactor() {
     gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
     this->graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(n_factor - 1, n_factor, pose_from.between(pose_to), noise);
     this->estimate.insert(n_factor, pose_to);
-    ROS_DEBUG("Add Odomfactor %d %d", n_factor - 1, n_factor);
+    ROS_DEBUG("Add Odomfactor %d %d from (%.1f,%.1f,%.1f) to (%.1f,%.1f,%.1f)", n_factor - 1, n_factor, current_kf.first.first.x(), 
+                                                                                        current_kf.first.first.y(),
+                                                                                        current_kf.first.first.z(),
+                                                                                        last_kf.first.first.x(),
+                                                                                        last_kf.first.first.y(),
+                                                                                        last_kf.first.first.z());
   }
 
   last_kf = current_kf;
@@ -1920,55 +1938,48 @@ void dliom::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::ve
 
 void dliom::OdomNode::correctPoses()
 {
-    if (this->is_loop)
-    {
-        this->global_kf_pose_ros.poses.clear();
-        std::unique_lock<decltype(this->keyframes_mutex)> lock_kf(this->keyframes_mutex);
-        for (size_t i = 0; i < this->estimate.size(); i++)
-        {
-          geometry_msgs::Pose p;
-          p.position.x = this->estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[0];
-          p.position.y = this->estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[1];
-          p.position.z = this->estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[2];
+  if (this->is_loop)
+  {
+       this->global_kf_pose_ros.poses.clear();
+      for (size_t i = 0; i < this->optimized_estimate.size(); i++)
+      {
+        geometry_msgs::Pose p;
+        p.position.x = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[0];
+        p.position.y = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[1];
+        p.position.z = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[2];
 
-          p.orientation.w = this->estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().w();
-          p.orientation.x = this->estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().x();
-          p.orientation.y = this->estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().y();
-          p.orientation.z = this->estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().z();
-          this->global_kf_pose_ros.poses.push_back(p);
-        }
-        lock_kf.unlock();
-    }
-    else
-    {
-        // auto idx_latest_estimate = this->estimate.size()
-        // geometry_msgs::Pose p;
-        // p.position.x = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).translation().vector().cast<float>()[0];
-        // p.position.y = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).translation().vector().cast<float>()[1];
-        // p.position.z = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).translation().vector().cast<float>()[2];
-        //
-        // p.orientation.w = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().w();
-        // p.orientation.x = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().x();
-        // p.orientation.y = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().y();
-        // p.orientation.z = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().z();
-        // this->global_pose.poses.push_back(p);
+        p.orientation.w = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().w();
+        p.orientation.x = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().x();
+        p.orientation.y = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().y();
+        p.orientation.z = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().z();
+        this->global_kf_pose_ros.poses.push_back(p);
+      }
+      this->global_kf_pose_ros.header.stamp = ros::Time::now();
+      this->global_kf_pose_ros.header.frame_id = this->odom_frame;
+      this->global_kf_pose_pub.publish(this->global_kf_pose_ros);
+      ROS_DEBUG("Publishing %ld poses!", this->optimized_estimate.size());
+      this->is_loop = false;
+  }
+  else
+  {
+      // auto idx_latest_optimized_estimate = this->optimized_estimate.size()
+      // geometry_msgs::Pose p;
+      // p.position.x = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[0];
+      // p.position.y = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[1];
+      // p.position.z = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[2];
+      //
+      // p.orientation.w = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().w();
+      // p.orientation.x = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().x();
+      // p.orientation.y = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().y();
+      // p.orientation.z = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().z();
+      // this->global_pose.poses.push_back(p);
 
-    }
-    // this->global_pose.header.stamp = ros::Time::now();
-    // this->global_pose.header.frame_id = this->odom_frame;
-    // this->global_pose_pub.publish(this->global_pose);
-    // auto idx_latest_estimate = this->estimate.size() - 1;
-    // this->lidarPose.p = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).translation().cast<float>();
-    // this->lidarPose.q = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().cast<float>();
-//    this->state.p = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).translation().cast<float>();
-//    this->state.q = this->estimate.at<gtsam::Pose3>(idx_latest_estimate).rotation().toQuaternion().cast<float>();
+  }
+    // this->lidarPose.p = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().cast<float>();
+    // this->lidarPose.q = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().cast<float>();
+//    this->state.p = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().cast<float>();
+//    this->state.q = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().cast<float>();
     // this->updateState();
-  std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-  this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
-  this->keyframe_timestamps.push_back(this->scan_header_stamp);
-  this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
-  this->keyframe_transformations.push_back(this->T_corr);
-  lock.unlock();
 }
 
 void dliom::OdomNode::buildSubmap(State vehicle_state) {

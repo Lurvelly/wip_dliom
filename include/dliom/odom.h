@@ -320,6 +320,7 @@ private:
   int n_factor;
   gtsam::NonlinearFactorGraph graph;
   gtsam::Values estimate;
+  gtsam::Values optimized_estimate;
   gtsam::ISAM2 optimizer;
 
   // Parameters
@@ -375,5 +376,8 @@ private:
   double geo_Kgb_;
   double geo_abias_max_;
   double geo_gbias_max_;
+
+  int alignment_threshold_;
+  double thresh_cov_;
 
 };
