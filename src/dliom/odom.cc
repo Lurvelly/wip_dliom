@@ -46,6 +46,7 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->global_kf_pose_pub  = this->nh.advertise<geometry_msgs::PoseArray>("global_kf_pose", 1, true);
   this->kf_cloud_pub = this->nh.advertise<sensor_msgs::PointCloud2>("kf_cloud", 1, true);
   this->deskewed_pub = this->nh.advertise<sensor_msgs::PointCloud2>("deskewed", 1, true);
+  this->jaccard_pub = this->nh.advertise<geometry_msgs::PoseArray>("jaccard", 1, true);
 
   this->publish_timer = this->nh.createTimer(ros::Duration(0.01), &dliom::OdomNode::publishPose, this);
 
@@ -205,9 +206,10 @@ void dliom::OdomNode::getParams() {
   // Gravity
   ros::param::param<double>("~dliom/odom/gravity", this->gravity_, 9.80665);
 
-  // Keyframe Threshold
+  // Keyframe Thresholds
   ros::param::param<double>("~dliom/odom/keyframe/threshD", this->keyframe_thresh_dist_, 0.1);
   ros::param::param<double>("~dliom/odom/keyframe/threshR", this->keyframe_thresh_rot_, 1.0);
+  ros::param::param<double>("~dliom/odom/keyframe/threshJaccardCorr", this->jaccard_corr_tresh_, 0.5);
 
   // Submap
   ros::param::param<int>("~dliom/odom/submap/keyframe/knn", this->submap_knn_, 10);
@@ -851,9 +853,9 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   this->gicp_hasConverged = this->gicp.hasConverged();
 
   // Debug statements and publish custom DLIO message
-  this->debug_thread = std::thread( &dliom::OdomNode::debug, this );
-  this->debug_thread.detach();
-
+  // this->debug_thread = std::thread( &dliom::OdomNode::debug, this );
+  // this->debug_thread.detach();
+  //
   this->geo.first_opt_done = true;
 
 }
@@ -2073,6 +2075,141 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
   }
 }
 
+void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
+    // clear vector of keyframe indices to use for submap
+  this->submap_kf_idx_curr.clear();
+
+  // calculate distance between current pose and poses in keyframe set
+  std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+  std::vector<float> ds;
+  std::vector<int> keyframe_nn;
+  for (int i = 0; i < this->num_processed_keyframes; i++) {
+    float d = sqrt( pow(vehicle_state.p[0] - this->keyframes[i].first.first[0], 2) +
+                    pow(vehicle_state.p[1] - this->keyframes[i].first.first[1], 2) +
+                    pow(vehicle_state.p[2] - this->keyframes[i].first.first[2], 2) );
+    ds.push_back(d);
+    keyframe_nn.push_back(i);
+  }
+  lock.unlock();
+
+  // get indices for top K nearest neighbor keyframe poses
+  this->pushSubmapIndices(ds, this->submap_knn_, keyframe_nn);
+  
+  std::vector<int> intersection_nums;
+  intersection_nums.reserve(this->submap_kf_idx_curr.size());
+  std::vector<int> union_nums;
+  union_nums.reserve(this->submap_kf_idx_curr.size());
+  this->similarity.clear();
+  std::vector<int> submap_kf_idx_curr_final;
+  int id;
+  float dis;
+
+  if (this->submap_kf_idx_curr.size() > 3)
+  {
+      for (size_t i = 0; i < this->submap_kf_idx_curr.size(); i++)
+      {
+          pcl::octree::OctreePointCloudSearch<PointType>::Ptr octree(new pcl::octree::OctreePointCloudSearch<PointType>(0.25));
+          lock.lock();
+          octree->setInputCloud(this->keyframes[this->submap_kf_idx_curr[i]].second);
+          octree->addPointsFromInputCloud();
+          lock.unlock();
+          intersection_nums[i] = 0;
+          for (int j = 0; j < this->current_scan->size(); j++)
+          {
+              octree->approxNearestSearch(this->current_scan->points[j], id, dis);
+              if (dis < 0.5)
+              {
+                  intersection_nums[i]++;
+              }
+          }
+          lock.lock();
+          union_nums[i] = this->current_scan->size() + this->keyframes[this->submap_kf_idx_curr[i]].second->size() - intersection_nums[i];
+          lock.unlock();
+          this->similarity.push_back( float(intersection_nums[i]) / float(union_nums[i]) );
+          if (this->similarity[i] > 0.1)
+              submap_kf_idx_curr_final.push_back(this->submap_kf_idx_curr[i]);
+      }
+
+      if (submap_kf_idx_curr_final.size() > 3)
+      {
+          this->submap_kf_idx_curr = submap_kf_idx_curr_final;
+      }
+      else
+      {
+          std::sort(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end(),
+                    [&](int a, int b){
+              int index1 = std::distance(this->submap_kf_idx_curr.begin(), std::find(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end(), a));
+              int index2 = std::distance(this->submap_kf_idx_curr.begin(), std::find(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end(), b));
+              return this->similarity[index1] > this->similarity[index2];
+          });
+          this->submap_kf_idx_curr.resize(3);
+
+          std::sort(this->similarity.begin(), this->similarity.end(), [](float a, float b) {return a > b;});
+          this->similarity.resize(3);
+      }
+  }
+
+  std::sort(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end());
+  auto last = std::unique(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end());
+  this->submap_kf_idx_curr.erase(last, this->submap_kf_idx_curr.end());
+
+  // sort current and previous submap kf list of indices
+  std::sort(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end());
+  std::sort(this->submap_kf_idx_prev.begin(), this->submap_kf_idx_prev.end());
+
+  // check if submap has changed from previous iteration
+  if (this->submap_kf_idx_curr != this->submap_kf_idx_prev){
+
+    this->submap_hasChanged = true;
+
+    // Pause to prevent stealing resources from the main loop if it is running.
+    this->pauseSubmapBuildIfNeeded();
+
+    // reinitialize submap cloud and normals
+    pcl::PointCloud<PointType>::Ptr submap_cloud_ (boost::make_shared<pcl::PointCloud<PointType>>());
+    std::shared_ptr<nano_gicp::CovarianceList> submap_normals_ (std::make_shared<nano_gicp::CovarianceList>());
+
+    for (auto k : this->submap_kf_idx_curr) {
+
+      // create current submap cloud
+      lock.lock();
+      *submap_cloud_ += *this->keyframes[k].second;
+      const auto& pose = this->keyframes[k].first;
+      geometry_msgs::Pose p;
+      p.position.x = pose.first.x();
+      p.position.y = pose.first.y(); 
+      p.position.z = pose.first.z(); 
+      p.orientation.w = pose.second.w();
+      p.orientation.x = pose.second.x();
+      p.orientation.y = pose.second.y();
+      p.orientation.z = pose.second.z();
+      this->jaccard_pose_ros.poses.push_back(p);
+      lock.unlock();
+
+      // grab corresponding submap cloud's normals
+      submap_normals_->insert( std::end(*submap_normals_),
+          std::begin(*(this->keyframe_normals[k])), std::end(*(this->keyframe_normals[k])) );
+    }
+
+    this->submap_cloud = submap_cloud_;
+    this->submap_normals = submap_normals_;
+
+    // Pause to prevent stealing resources from the main loop if it is running.
+    this->pauseSubmapBuildIfNeeded();
+
+    this->gicp_temp.setInputTarget(this->submap_cloud);
+    this->submap_kdtree = this->gicp_temp.target_kdtree_;
+
+    this->submap_kf_idx_prev = this->submap_kf_idx_curr;
+  }
+
+  // Publish
+  this->jaccard_pose_ros.header.stamp = ros::Time::now();
+  this->jaccard_pose_ros.header.frame_id = this->odom_frame;
+  this->jaccard_pub.publish(this->jaccard_pose_ros);
+  this->jaccard_pose_ros.poses.clear();
+}
+
 void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
   // transform the new keyframe(s) and associated covariance list(s)
@@ -2108,7 +2245,9 @@ void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
   // Pause to prevent stealing resources from the main loop if it is running.
   this->pauseSubmapBuildIfNeeded();
 
-  this->buildSubmap(vehicle_state);
+  // this->buildSubmap(vehicle_state);
+
+  this->buildJaccardSubmap(vehicle_state);
 }
 
 void dliom::OdomNode::pauseSubmapBuildIfNeeded() {

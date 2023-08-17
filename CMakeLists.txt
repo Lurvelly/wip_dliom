@@ -34,6 +34,7 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   pcl_ros
   message_generation
+  backward_ros
 )
 
 add_service_files(

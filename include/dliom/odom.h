@@ -81,6 +81,7 @@ private:
   void pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames);
   void correctPoses();
   void buildSubmap(State vehicle_state);
+  void buildJaccardSubmap(State vehicle_state);
   void updateKeyframesAndGraph();
   void updateKeyframes();
   void buildKeyframesAndSubmap(State vehicle_state);
@@ -104,6 +105,7 @@ private:
   ros::Publisher global_kf_pose_pub;
   ros::Publisher kf_cloud_pub;
   ros::Publisher deskewed_pub;
+  ros::Publisher jaccard_pub;
 
   // ROS Msgs
   nav_msgs::Odometry odom_ros;
@@ -111,6 +113,7 @@ private:
   nav_msgs::Path path_ros;
   geometry_msgs::PoseArray kf_pose_ros;
   geometry_msgs::PoseArray global_kf_pose_ros;
+  geometry_msgs::PoseArray jaccard_pose_ros;
 
   // Flags
   std::atomic<bool> dlio_initialized;
@@ -180,6 +183,7 @@ private:
   pcl::PointCloud<PointType>::ConstPtr submap_cloud;
   std::shared_ptr<const nano_gicp::CovarianceList> submap_normals;
   std::shared_ptr<const nanoflann::KdTreeFLANN<PointType>> submap_kdtree;
+  std::vector<float> similarity;
 
   std::vector<int> submap_kf_idx_curr;
   std::vector<int> submap_kf_idx_prev;
@@ -339,6 +343,7 @@ private:
 
   double keyframe_thresh_dist_;
   double keyframe_thresh_rot_;
+  double jaccard_corr_tresh_;
 
   int submap_knn_;
   int submap_kcv_;
