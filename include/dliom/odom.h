@@ -26,6 +26,8 @@ private:
 
   struct State;
   struct ImuMeas;
+  struct Keyframe;
+  struct Pose;
 
   void getParams();
 
@@ -37,8 +39,7 @@ private:
 
   void publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
   void publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
-  void publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                       pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp);
+  void publishKeyframe(const Keyframe kf, ros::Time timestamp);
 
   void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc);
   void preprocessPoints();
@@ -47,7 +48,7 @@ private:
   void initializeKeyframesAndGraph();
   void setInputSource();
 
-  void initializeDLIO();
+  void initializeDLIOM();
 
   void getNextPose();
   bool imuMeasFromTimeRange(double start_time, double end_time,
@@ -81,10 +82,10 @@ private:
   void pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames);
   void correctPoses();
   void buildSubmap(State vehicle_state);
-  void buildJaccardSubmap(State vehicle_state);
+  void buildJaccardSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
   void updateKeyframesAndGraph();
   void updateKeyframes();
-  void buildKeyframesAndSubmap(State vehicle_state);
+  void buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
   void pauseSubmapBuildIfNeeded();
 
   void debug();
@@ -116,7 +117,7 @@ private:
   geometry_msgs::PoseArray jaccard_pose_ros;
 
   // Flags
-  std::atomic<bool> dlio_initialized;
+  std::atomic<bool> dliom_initialized;
   std::atomic<bool> first_valid_scan;
   std::atomic<bool> first_imu_received;
   std::atomic<bool> imu_calibrated;
@@ -136,10 +137,8 @@ private:
   double length_traversed;
 
   // Keyframes
-  std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                        pcl::PointCloud<PointType>::ConstPtr>> keyframes;
-  std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                        pcl::PointCloud<PointType>::ConstPtr>> global_keyframes;
+  std::vector<Keyframe> keyframes;
+  std::vector<Keyframe> global_keyframes;
   std::vector<ros::Time> keyframe_timestamps;
   std::vector<ros::Time> global_keyframe_timestamps;
   std::vector<std::shared_ptr<const nano_gicp::CovarianceList>> keyframe_normals;
@@ -150,7 +149,7 @@ private:
   // Factors
   void addOdomFactor();
   void addGNSSFactor();
-  gtsam::Pose3 state2gtsam(const Eigen::Vector3f &pos, Eigen::Quaternionf rot);
+  gtsam::Pose3 state2gtsam(const Pose& p);
 
   // Sensor Type
   dliom::SensorType sensor;
@@ -304,9 +303,14 @@ private:
   struct Pose {
     Eigen::Vector3f p; // position in world frame
     Eigen::Quaternionf q; // orientation in world frame
+  } lidarPose, imuPose;
+
+  struct Keyframe {
+    Keyframe(const Pose& p, const pcl::PointCloud<Point>::ConstPtr cloud) : pose(p), cloud(cloud) {}
+    Keyframe() = default;
+    Pose pose;
+    pcl::PointCloud<Point>::ConstPtr cloud;
   };
-  Pose lidarPose;
-  Pose imuPose;
 
   // Metrics
   struct Metrics {

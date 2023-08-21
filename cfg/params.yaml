@@ -40,7 +40,7 @@ dliom:
 
     preprocessing:
       cropBoxFilter:
-        size: 1.0
+        size: 3.0
       voxelFilter:
         res: 0.25
 

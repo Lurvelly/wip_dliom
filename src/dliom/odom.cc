@@ -24,7 +24,7 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->num_threads_ = omp_get_max_threads();
 
-  this->dlio_initialized = false;
+  this->dliom_initialized = false;
   this->first_valid_scan = false;
   this->first_imu_received = false;
   if (this->imu_calibrate_) {this->imu_calibrated = false;}
@@ -93,7 +93,7 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->first_scan_stamp = 0.;
   this->prev_gnss_stamp = 0.;
   this->elapsed_time = 0.;
-  this->length_traversed;
+  this->length_traversed = 0.;
 
   this->convex_hull.setDimension(3);
   this->concave_hull.setDimension(3);
@@ -470,17 +470,17 @@ void dliom::OdomNode::publishCloud(pcl::PointCloud<PointType>::ConstPtr publishe
 
 }
 
-void dliom::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp) {
+void dliom::OdomNode::publishKeyframe(const Keyframe kf, ros::Time timestamp) {
 
   // Push back
   geometry_msgs::Pose p;
-  p.position.x = kf.first.first[0];
-  p.position.y = kf.first.first[1];
-  p.position.z = kf.first.first[2];
-  p.orientation.w = kf.first.second.w();
-  p.orientation.x = kf.first.second.x();
-  p.orientation.y = kf.first.second.y();
-  p.orientation.z = kf.first.second.z();
+  p.position.x = kf.pose.p[0];
+  p.position.y = kf.pose.p[1];
+  p.position.z = kf.pose.p[2];
+  p.orientation.w = kf.pose.q.w();
+  p.orientation.x = kf.pose.q.x();
+  p.orientation.y = kf.pose.q.y();
+  p.orientation.z = kf.pose.q.z();
   this->kf_pose_ros.poses.push_back(p);
 
   // Publish
@@ -490,16 +490,16 @@ void dliom::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen
 
   // publish keyframe scan for map
   if (this->vf_use_) {
-    if (kf.second->points.size() == kf.second->width * kf.second->height) {
+    if (kf.cloud->points.size() == kf.cloud->width * kf.cloud->height) {
       sensor_msgs::PointCloud2 keyframe_cloud_ros;
-      pcl::toROSMsg(*kf.second, keyframe_cloud_ros);
+      pcl::toROSMsg(*kf.cloud, keyframe_cloud_ros);
       keyframe_cloud_ros.header.stamp = timestamp;
       keyframe_cloud_ros.header.frame_id = this->odom_frame;
       this->kf_cloud_pub.publish(keyframe_cloud_ros);
     }
   } else {
     sensor_msgs::PointCloud2 keyframe_cloud_ros;
-    pcl::toROSMsg(*kf.second, keyframe_cloud_ros);
+    pcl::toROSMsg(*kf.cloud, keyframe_cloud_ros);
     keyframe_cloud_ros.header.stamp = timestamp;
     keyframe_cloud_ros.header.frame_id = this->odom_frame;
     this->kf_cloud_pub.publish(keyframe_cloud_ros);
@@ -730,7 +730,7 @@ void dliom::OdomNode::initializeInputTarget() {
   this->prev_scan_stamp = this->scan_stamp;
 
   // keep history of keyframes
-  this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+  this->keyframes.push_back({this->lidarPose, this->current_scan});
   this->keyframe_timestamps.push_back(this->scan_header_stamp);
   this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
   this->keyframe_transformations.push_back(this->T_corr);
@@ -744,15 +744,15 @@ void dliom::OdomNode::setInputSource() {
   this->gicp.calculateSourceCovariances();
 }
 
-void dliom::OdomNode::initializeDLIO() {
+void dliom::OdomNode::initializeDLIOM() {
 
   // Wait for IMU
   if (!this->first_imu_received || !this->imu_calibrated) {
     return;
   }
 
-  this->dlio_initialized = true;
-  std::cout << std::endl << " DLIO initialized!" << std::endl;
+  this->dliom_initialized = true;
+  std::cout << std::endl << " DLIOM initialized!" << std::endl;
 
 }
 
@@ -769,8 +769,8 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   }
 
   // DLIO Initialization procedures (IMU calib, gravity align)
-  if (!this->dlio_initialized) {
-    this->initializeDLIO();
+  if (!this->dliom_initialized) {
+    this->initializeDLIOM();
   }
 
   // Convert incoming scan into DLIO format
@@ -805,7 +805,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
     this->initializeInputTarget();
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state );
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state, this->current_scan);
     this->submap_future.wait(); // wait until completion
     return;
   }
@@ -822,7 +822,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   if (this->new_submap_is_ready) {
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state );
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state, this->current_scan);
   } else {
     lock.lock();
     this->main_loop_running = false;
@@ -1013,7 +1013,7 @@ void dliom::OdomNode::callbackGNSS(const sensor_msgs::NavSatFix::ConstPtr& gnss)
   this->gnss_rates.push_back( 1. / (this->gnss_stamp - this->prev_gnss_stamp) );
   this->prev_gnss_stamp = this->gnss_stamp;
 
-  if (this->dlio_initialized)
+  if (this->dliom_initialized)
   {
       LLA lla { *gnss };  
 
@@ -1539,9 +1539,9 @@ void dliom::OdomNode::computeConvexHull() {
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
   for (int i = 0; i < this->num_processed_keyframes; i++) {
     PointType pt;
-    pt.x = this->keyframes[i].first.first[0];
-    pt.y = this->keyframes[i].first.first[1];
-    pt.z = this->keyframes[i].first.first[2];
+    pt.x = this->keyframes[i].pose.p.x();
+    pt.y = this->keyframes[i].pose.p.y();
+    pt.z = this->keyframes[i].pose.p.z();
     cloud->push_back(pt);
   }
   lock.unlock();
@@ -1558,7 +1558,7 @@ void dliom::OdomNode::computeConvexHull() {
   this->convex_hull.getHullPointIndices(*convex_hull_point_idx);
 
   this->keyframe_convex.clear();
-  for (int i=0; i<convex_hull_point_idx->indices.size(); ++i) {
+  for (size_t i = 0; i < convex_hull_point_idx->indices.size(); ++i) {
     this->keyframe_convex.push_back(convex_hull_point_idx->indices[i]);
   }
 
@@ -1578,9 +1578,9 @@ void dliom::OdomNode::computeConcaveHull() {
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
   for (int i = 0; i < this->num_processed_keyframes; i++) {
     PointType pt;
-    pt.x = this->keyframes[i].first.first[0];
-    pt.y = this->keyframes[i].first.first[1];
-    pt.z = this->keyframes[i].first.first[2];
+    pt.x = this->keyframes[i].pose.p.x();
+    pt.y = this->keyframes[i].pose.p.y();
+    pt.z = this->keyframes[i].pose.p.z();
     cloud->push_back(pt);
   }
   lock.unlock();
@@ -1597,7 +1597,7 @@ void dliom::OdomNode::computeConcaveHull() {
   this->concave_hull.getHullPointIndices(*concave_hull_point_idx);
 
   this->keyframe_concave.clear();
-  for (int i=0; i<concave_hull_point_idx->indices.size(); ++i) {
+  for (size_t i = 0; i < concave_hull_point_idx->indices.size(); ++i) {
     this->keyframe_concave.push_back(concave_hull_point_idx->indices[i]);
   }
 
@@ -1614,9 +1614,9 @@ bool dliom::OdomNode::newKeyframe() {
   for (const auto& k : this->keyframes) {
 
     // calculate distance between current pose and pose in keyframes
-    float delta_d = sqrt( pow(this->state.p[0] - k.first.first[0], 2) +
-                          pow(this->state.p[1] - k.first.first[1], 2) +
-                          pow(this->state.p[2] - k.first.first[2], 2) );
+    float delta_d = sqrt( pow(this->state.p[0] - k.pose.p.x(), 2) +
+                          pow(this->state.p[1] - k.pose.p.y(), 2) +
+                          pow(this->state.p[2] - k.pose.p.z(), 2) );
 
     // count the number nearby current pose
     if (delta_d <= this->keyframe_thresh_dist_ * 1.5){
@@ -1634,13 +1634,12 @@ bool dliom::OdomNode::newKeyframe() {
   }
 
   // get closest pose and corresponding rotation
-  Eigen::Vector3f closest_pose = this->keyframes[this->closest_idx].first.first;
-  Eigen::Quaternionf closest_pose_r = this->keyframes[this->closest_idx].first.second;
+  const auto& [closest_pose_t, closest_pose_r] = this->keyframes[this->closest_idx].pose;
 
   // calculate distance between current pose and closest pose from above
-  float dd = sqrt( pow(this->state.p[0] - closest_pose[0], 2) +
-                   pow(this->state.p[1] - closest_pose[1], 2) +
-                   pow(this->state.p[2] - closest_pose[2], 2) );
+  float dd = sqrt( pow(this->state.p[0] - closest_pose_t[0], 2) +
+                   pow(this->state.p[1] - closest_pose_t[1], 2) +
+                   pow(this->state.p[2] - closest_pose_t[2], 2) );
 
   // calculate difference in orientation using SLERP
   Eigen::Quaternionf dq;
@@ -1687,9 +1686,9 @@ void dliom::OdomNode::updateKeyframes() {
   for (const auto& k : this->keyframes) {
 
     // calculate distance between current pose and pose in keyframes
-    float delta_d = sqrt( pow(this->state.p[0] - k.first.first[0], 2) +
-                          pow(this->state.p[1] - k.first.first[1], 2) +
-                          pow(this->state.p[2] - k.first.first[2], 2) );
+    float delta_d = sqrt( pow(this->state.p[0] - k.pose.p.x(), 2) +
+                          pow(this->state.p[1] - k.pose.p.y(), 2) +
+                          pow(this->state.p[2] - k.pose.p.z(), 2) );
 
     // count the number nearby current pose
     if (delta_d <= this->keyframe_thresh_dist_ * 1.5){
@@ -1707,13 +1706,12 @@ void dliom::OdomNode::updateKeyframes() {
   }
 
   // get closest pose and corresponding rotation
-  Eigen::Vector3f closest_pose = this->keyframes[closest_idx].first.first;
-  Eigen::Quaternionf closest_pose_r = this->keyframes[closest_idx].first.second;
+  const auto& [closest_pose_t, closest_pose_r] = this->keyframes[closest_idx].pose;
 
   // calculate distance between current pose and closest pose from above
-  float dd = sqrt( pow(this->state.p[0] - closest_pose[0], 2) +
-                   pow(this->state.p[1] - closest_pose[1], 2) +
-                   pow(this->state.p[2] - closest_pose[2], 2) );
+  float dd = sqrt( pow(this->state.p[0] - closest_pose_t[0], 2) +
+                   pow(this->state.p[1] - closest_pose_t[1], 2) +
+                   pow(this->state.p[2] - closest_pose_t[2], 2) );
 
   // calculate difference in orientation using SLERP
   Eigen::Quaternionf dq;
@@ -1748,7 +1746,7 @@ void dliom::OdomNode::updateKeyframes() {
 
     // update keyframe vector
     std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-    this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+    this->keyframes.push_back({this->lidarPose, this->current_scan});
     this->keyframe_timestamps.push_back(this->scan_header_stamp);
     this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
     this->keyframe_transformations.push_back(this->T_corr);
@@ -1761,7 +1759,7 @@ void dliom::OdomNode::updateKeyframes() {
 void dliom::OdomNode::updateKeyframesAndGraph() {
   if (this->newKeyframe()) {
    std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-   this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+   this->keyframes.push_back({this->lidarPose, this->current_scan});
    ROS_DEBUG("Adding keyframe: (%.1f,%.1f,%.1f)", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
    this->keyframe_timestamps.push_back(this->scan_header_stamp);
    this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
@@ -1850,38 +1848,36 @@ void dliom::OdomNode::addOdomFactor() {
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
   auto current_kf = this->keyframes.back();
   lock.unlock();
-  static auto last_kf = std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, pcl::PointCloud<PointType>::ConstPtr>{};
+  static auto last_kf = Keyframe{};
   
   if (this->n_factor == 0) {
     auto variance = (gtsam::Vector(6) << 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12).finished();
     gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
-    auto pose = state2gtsam(current_kf.first.first, current_kf.first.second); 
+    auto pose = state2gtsam(current_kf.pose); 
     this->graph.addPrior(0, pose, noise);
     this->estimate.insert(0, pose);
-    ROS_DEBUG("Add Odomfactor: 0 %.1f %.1f %.1f", current_kf.first.first.x(), current_kf.first.first.y(), current_kf.first.first.z());
+    ROS_DEBUG("Add Odomfactor: 0 %.1f %.1f %.1f", current_kf.pose.p.x(), current_kf.pose.p.y(), current_kf.pose.p.z());
   } else {
-    auto pose_to = state2gtsam(current_kf.first.first, current_kf.first.second);
-    auto pose_from = state2gtsam(last_kf.first.first, last_kf.first.second);
+    auto pose_to = state2gtsam(current_kf.pose);
+    auto pose_from = state2gtsam(last_kf.pose);
     auto variance = (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished();
     gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
     this->graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(n_factor - 1, n_factor, pose_from.between(pose_to), noise);
     this->estimate.insert(n_factor, pose_to);
-    ROS_DEBUG("Add Odomfactor %d %d from (%.1f,%.1f,%.1f) to (%.1f,%.1f,%.1f)", n_factor - 1, n_factor, current_kf.first.first.x(), 
-                                                                                        current_kf.first.first.y(),
-                                                                                        current_kf.first.first.z(),
-                                                                                        last_kf.first.first.x(),
-                                                                                        last_kf.first.first.y(),
-                                                                                        last_kf.first.first.z());
+    ROS_DEBUG("Add Odomfactor %d %d from (%.1f,%.1f,%.1f) to (%.1f,%.1f,%.1f)", n_factor - 1, n_factor, current_kf.pose.p.x(), 
+                                                                                        current_kf.pose.p.y(),
+                                                                                        current_kf.pose.p.z(),
+                                                                                        last_kf.pose.p.x(),
+                                                                                        last_kf.pose.p.y(),
+                                                                                        last_kf.pose.p.z());
   }
 
   last_kf = current_kf;
   ++this->n_factor;
 }
 
-gtsam::Pose3 dliom::OdomNode::state2gtsam(const Eigen::Vector3f &pos, Eigen::Quaternionf rot)
-{
-    rot.normalize();
-    return gtsam::Pose3(gtsam::Rot3(rot.cast<double>()), gtsam::Point3(pos.cast<double>()));
+gtsam::Pose3 dliom::OdomNode::state2gtsam(const Pose& p) {
+    return gtsam::Pose3(gtsam::Rot3(p.q.normalized().cast<double>()), gtsam::Point3(p.p.cast<double>()));
 }
 
 void dliom::OdomNode::setAdaptiveParams() {
@@ -1994,9 +1990,9 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
   std::vector<float> ds;
   std::vector<int> keyframe_nn;
   for (int i = 0; i < this->num_processed_keyframes; i++) {
-    float d = sqrt( pow(vehicle_state.p[0] - this->keyframes[i].first.first[0], 2) +
-                    pow(vehicle_state.p[1] - this->keyframes[i].first.first[1], 2) +
-                    pow(vehicle_state.p[2] - this->keyframes[i].first.first[2], 2) );
+    float d = sqrt( pow(vehicle_state.p[0] - this->keyframes[i].pose.p[0], 2) +
+                    pow(vehicle_state.p[1] - this->keyframes[i].pose.p[1], 2) +
+                    pow(vehicle_state.p[2] - this->keyframes[i].pose.p[2], 2) );
     ds.push_back(d);
     keyframe_nn.push_back(i);
   }
@@ -2054,7 +2050,7 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
 
       // create current submap cloud
       lock.lock();
-      *submap_cloud_ += *this->keyframes[k].second;
+      *submap_cloud_ += *this->keyframes[k].cloud;
       lock.unlock();
 
       // grab corresponding submap cloud's normals
@@ -2075,7 +2071,7 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
   }
 }
 
-void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
+void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud) {
     // clear vector of keyframe indices to use for submap
   this->submap_kf_idx_curr.clear();
 
@@ -2084,9 +2080,9 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
   std::vector<float> ds;
   std::vector<int> keyframe_nn;
   for (int i = 0; i < this->num_processed_keyframes; i++) {
-    float d = sqrt( pow(vehicle_state.p[0] - this->keyframes[i].first.first[0], 2) +
-                    pow(vehicle_state.p[1] - this->keyframes[i].first.first[1], 2) +
-                    pow(vehicle_state.p[2] - this->keyframes[i].first.first[2], 2) );
+    float d = sqrt( pow(vehicle_state.p[0] - this->keyframes[i].pose.p[0], 2) +
+                    pow(vehicle_state.p[1] - this->keyframes[i].pose.p[1], 2) +
+                    pow(vehicle_state.p[2] - this->keyframes[i].pose.p[2], 2) );
     ds.push_back(d);
     keyframe_nn.push_back(i);
   }
@@ -2110,20 +2106,20 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
       {
           pcl::octree::OctreePointCloudSearch<PointType>::Ptr octree(new pcl::octree::OctreePointCloudSearch<PointType>(0.25));
           lock.lock();
-          octree->setInputCloud(this->keyframes[this->submap_kf_idx_curr[i]].second);
+          octree->setInputCloud(this->keyframes[this->submap_kf_idx_curr[i]].cloud);
           octree->addPointsFromInputCloud();
           lock.unlock();
           intersection_nums[i] = 0;
-          for (int j = 0; j < this->current_scan->size(); j++)
+          for (int j = 0; j < cloud->size(); j++)
           {
-              octree->approxNearestSearch(this->current_scan->points[j], id, dis);
+              octree->approxNearestSearch(cloud->points[j], id, dis);
               if (dis < 0.5)
               {
                   intersection_nums[i]++;
               }
           }
           lock.lock();
-          union_nums[i] = this->current_scan->size() + this->keyframes[this->submap_kf_idx_curr[i]].second->size() - intersection_nums[i];
+          union_nums[i] = cloud->size() + this->keyframes[this->submap_kf_idx_curr[i]].cloud->size() - intersection_nums[i];
           lock.unlock();
           this->similarity.push_back( float(intersection_nums[i]) / float(union_nums[i]) );
           if (this->similarity[i] > 0.1)
@@ -2173,16 +2169,16 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
 
       // create current submap cloud
       lock.lock();
-      *submap_cloud_ += *this->keyframes[k].second;
-      const auto& pose = this->keyframes[k].first;
+      *submap_cloud_ += *this->keyframes[k].cloud;
+      const auto& pose = this->keyframes[k].pose;
       geometry_msgs::Pose p;
-      p.position.x = pose.first.x();
-      p.position.y = pose.first.y(); 
-      p.position.z = pose.first.z(); 
-      p.orientation.w = pose.second.w();
-      p.orientation.x = pose.second.x();
-      p.orientation.y = pose.second.y();
-      p.orientation.z = pose.second.z();
+      p.position.x = pose.p.x();
+      p.position.y = pose.p.y(); 
+      p.position.z = pose.p.z(); 
+      p.orientation.w = pose.q.w();
+      p.orientation.x = pose.q.x();
+      p.orientation.y = pose.q.y();
+      p.orientation.z = pose.q.z();
       this->jaccard_pose_ros.poses.push_back(p);
       lock.unlock();
 
@@ -2210,13 +2206,13 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state) {
   this->jaccard_pose_ros.poses.clear();
 }
 
-void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
+void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud) {
 
   // transform the new keyframe(s) and associated covariance list(s)
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
 
-  for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
-    pcl::PointCloud<PointType>::ConstPtr raw_keyframe = this->keyframes[i].second;
+  for (size_t i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
+    pcl::PointCloud<PointType>::ConstPtr raw_keyframe = this->keyframes[i].cloud;
     std::shared_ptr<const nano_gicp::CovarianceList> raw_covariances = this->keyframe_normals[i];
     Eigen::Matrix4f T = this->keyframe_transformations[i];
     lock.unlock();
@@ -2233,7 +2229,7 @@ void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
     ++this->num_processed_keyframes;
 
     lock.lock();
-    this->keyframes[i].second = transformed_keyframe;
+    this->keyframes[i].cloud = transformed_keyframe;
     this->keyframe_normals[i] = transformed_covariances;
 
     this->publish_keyframe_thread = std::thread( &dliom::OdomNode::publishKeyframe, this, this->keyframes[i], this->keyframe_timestamps[i] );
@@ -2247,7 +2243,7 @@ void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
   // this->buildSubmap(vehicle_state);
 
-  this->buildJaccardSubmap(vehicle_state);
+  this->buildJaccardSubmap(vehicle_state, cloud);
 }
 
 void dliom::OdomNode::pauseSubmapBuildIfNeeded() {
