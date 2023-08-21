@@ -28,6 +28,7 @@ private:
   struct ImuMeas;
   struct Keyframe;
   struct Pose;
+  struct Similarity;
 
   void getParams();
 
@@ -114,7 +115,7 @@ private:
   nav_msgs::Path path_ros;
   geometry_msgs::PoseArray kf_pose_ros;
   geometry_msgs::PoseArray global_kf_pose_ros;
-  geometry_msgs::PoseArray jaccard_pose_ros;
+  pcl::PointCloud<pcl::PointXYZ> jaccard_ros;
 
   // Flags
   std::atomic<bool> dliom_initialized;
@@ -182,10 +183,9 @@ private:
   pcl::PointCloud<PointType>::ConstPtr submap_cloud;
   std::shared_ptr<const nano_gicp::CovarianceList> submap_normals;
   std::shared_ptr<const nanoflann::KdTreeFLANN<PointType>> submap_kdtree;
-  std::vector<float> similarity;
 
-  std::vector<int> submap_kf_idx_curr;
-  std::vector<int> submap_kf_idx_prev;
+  std::vector<Similarity> submap_kf_curr;
+  std::vector<Similarity> submap_kf_prev;
 
   bool new_submap_is_ready;
   std::future<void> submap_future;
@@ -306,10 +306,14 @@ private:
   } lidarPose, imuPose;
 
   struct Keyframe {
-    Keyframe(const Pose& p, const pcl::PointCloud<Point>::ConstPtr cloud) : pose(p), cloud(cloud) {}
-    Keyframe() = default;
     Pose pose;
     pcl::PointCloud<Point>::ConstPtr cloud;
+    pcl::octree::OctreePointCloudSearch<PointType>::Ptr tree;
+  };
+
+  struct Similarity {
+    int index;
+    float similarity;
   };
 
   // Metrics
@@ -347,7 +351,8 @@ private:
 
   double keyframe_thresh_dist_;
   double keyframe_thresh_rot_;
-  double jaccard_corr_tresh_;
+  double jaccard_corr_thresh_;
+  double jaccard_sim_thresh_;
 
   int submap_knn_;
   int submap_kcv_;
