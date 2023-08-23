@@ -11,6 +11,7 @@
  ***********************************************************/
 
 #include "dliom/odom.h"
+#include <string>
 
 dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
@@ -27,8 +28,7 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->dliom_initialized = false;
   this->first_valid_scan = false;
   this->first_imu_received = false;
-  if (this->imu_calibrate_) {this->imu_calibrated = false;}
-  else {this->imu_calibrated = true;}
+  this->imu_calibrated = !this->imu_calibrate_;
   this->deskew_status = false;
   this->deskew_size = 0;
 
@@ -47,6 +47,20 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->kf_cloud_pub = this->nh.advertise<sensor_msgs::PointCloud2>("kf_cloud", 1, true);
   this->deskewed_pub = this->nh.advertise<sensor_msgs::PointCloud2>("deskewed", 1, true);
   this->jaccard_pub = this->nh.advertise<sensor_msgs::PointCloud2>("jaccard", 1, true);
+  this->jaccard_constraints_pub = this->nh.advertise<visualization_msgs::MarkerArray>("jaccard_constraints", 1, true);
+
+  this->jaccard_constraints_marker.header.frame_id = "base_link";  // Replace with appropriate frame ID
+  this->jaccard_constraints_marker.header.stamp = ros::Time::now();
+  this->jaccard_constraints_marker.ns = "line_namespace";
+  this->jaccard_constraints_marker.id = 0;
+  this->jaccard_constraints_marker.type = visualization_msgs::Marker::LINE_STRIP;
+  this->jaccard_constraints_marker.action = visualization_msgs::Marker::ADD;
+  this->jaccard_constraints_marker.color.r = 1.0;
+  this->jaccard_constraints_marker.color.g = 1.0;
+  this->jaccard_constraints_marker.color.b = 1.0;
+  this->jaccard_constraints_marker.scale.x = 0.05;
+  this->jaccard_constraints_marker.color.a = 1.0;
+  this->jaccard_constraints_marker.pose.orientation.w = 1.0;
 
   this->publish_timer = this->nh.createTimer(ros::Duration(0.01), &dliom::OdomNode::publishPose, this);
 
@@ -79,6 +93,8 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->gnss_buffer.set_capacity(1);
   this->gnss_aligned = false;
+
+  this->kf_sim_buffer.set_capacity(1);
 
   this->original_scan = pcl::PointCloud<PointType>::ConstPtr (boost::make_shared<const pcl::PointCloud<PointType>>());
   this->deskewed_scan = pcl::PointCloud<PointType>::ConstPtr (boost::make_shared<const pcl::PointCloud<PointType>>());
@@ -136,6 +152,7 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   // GTSAM
   this->is_loop = false;
+  this->graph_thread = std::thread(&OdomNode::poseGraphOptimization, this);
 
   // CPU Specs
   char CPUBrandString[0x40];
@@ -177,7 +194,9 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
 }
 
-dliom::OdomNode::~OdomNode() {}
+dliom::OdomNode::~OdomNode() {
+  if (this->graph_thread.joinable()) this->graph_thread.join();
+}
 
 void dliom::OdomNode::getParams() {
 
@@ -736,9 +755,9 @@ void dliom::OdomNode::initializeInputTarget() {
   this->keyframe_timestamps.push_back(this->scan_header_stamp);
   this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
   this->keyframe_transformations.push_back(this->T_corr);
-   ROS_DEBUG("Added first keyframe: %.1f %.1f %.1f", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
+  ROS_DEBUG("Added first keyframe: %.1f %.1f %.1f", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
 
-  this->initializeKeyframesAndGraph();
+  updateBackendData();
 }
 
 void dliom::OdomNode::setInputSource() {
@@ -855,11 +874,10 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   this->gicp_hasConverged = this->gicp.hasConverged();
 
   // Debug statements and publish custom DLIO message
-  // this->debug_thread = std::thread( &dliom::OdomNode::debug, this );
-  // this->debug_thread.detach();
-  //
-  this->geo.first_opt_done = true;
+  this->debug_thread = std::thread( &dliom::OdomNode::debug, this );
+  this->debug_thread.detach();
 
+  this->geo.first_opt_done = true;
 }
 
 void dliom::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr& imu_raw) {
@@ -1087,6 +1105,9 @@ void dliom::OdomNode::getNextPose() {
 
     // Set target cloud's normals as submap normals
     this->gicp.setTargetCovariances(this->submap_normals);
+
+    // Update data for GTSAM
+    // this->updateBackendData();
 
     this->submap_hasChanged = false;
   }
@@ -1759,8 +1780,7 @@ void dliom::OdomNode::updateKeyframes() {
 
 }
 
-void dliom::OdomNode::updateKeyframesAndGraph() {
-  if (this->newKeyframe()) {
+void dliom::OdomNode::addKeyframe() {
    std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
    auto tree = boost::make_shared<pcl::octree::OctreePointCloudSearch<PointType>>(this->jaccard_corr_thresh_);
    this->keyframes.push_back({this->lidarPose, this->current_scan, tree});
@@ -1769,43 +1789,42 @@ void dliom::OdomNode::updateKeyframesAndGraph() {
    this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
    this->keyframe_transformations.push_back(this->T_corr);
    lock.unlock();
-    this->addOdomFactor();
-    //ROS_DEBUG("Added Odom Factor");
-    this->addGNSSFactor();
-    //ROS_DEBUG("Added GPS Factor");
-    //
-    this->optimizer.update(this->graph, this->estimate);
-    this->optimizer.update();
-    //
-    if (this->is_loop && this->gnss_aligned)
-    {
-        this->optimizer.update();
-        // this->optimizer.update();
-        // this->optimizer.update();
-        // this->optimizer.update();
-        // this->optimizer.update();
-    }
-    //     this->optimizer.update();
-    //     this->optimizer.update();
-    // }
-    //
-    this->graph.resize(0);
-    this->estimate.clear();
-    this->optimized_estimate = this->optimizer.calculateEstimate();
+}
 
-    this->correctPoses();
-
-    // std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-    // this->keyframes.push_back(std::make_pair(sddtd::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
-    // this->keyframe_timestamps.push_back(this->scan_header_stamp);
-    // this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
-    // this->keyframe_transformations.push_back(this->T_corr);
-    // lock.unlock();
+void dliom::OdomNode::updateKeyframesAndGraph() {
+  if (this->newKeyframe()) {
+    this->addKeyframe();
+    this->updateBackendData();
   }
 }
 
-void dliom::OdomNode::initializeKeyframesAndGraph() {
-  this->addOdomFactor();
+void dliom::OdomNode::updateBackendData() {
+  std::unique_lock<decltype(this->mtx_kf_sim)> lock(this->mtx_kf_sim);
+  this->kf_sim_buffer.push_back(this->submap_kf_curr); 
+  lock.unlock();
+}
+
+void dliom::OdomNode::poseGraphOptimization() {
+  while (this->nh.ok() && ros::ok()) {
+    this->addOdomFactor();
+    // this->addLoopFactor();
+    this->addGNSSFactor();
+    this->updateGraphOptimization();
+    this->correctPoses();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
+void dliom::OdomNode::updateGraphOptimization() {
+    this->optimizer.update(this->graph, this->estimate);
+    this->optimizer.update();
+    if (this->is_loop && this->gnss_aligned)
+    {
+        this->optimizer.update();
+    }
+    this->graph.resize(0);
+    this->estimate.clear();
+    this->optimized_estimate = this->optimizer.calculateEstimate();
 }
 
 void dliom::OdomNode::addGNSSFactor() {
@@ -1849,11 +1868,26 @@ void dliom::OdomNode::addGNSSFactor() {
 }
 
 void dliom::OdomNode::addOdomFactor() {
-  std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+  std::unique_lock<decltype(this->mtx_kf_sim)> sim_lock(this->mtx_kf_sim);
+  if (this->kf_sim_buffer.empty()) {
+  sim_lock.unlock();
+    return;
+  }
+
+  auto kfs = this->kf_sim_buffer[0];
+  this->kf_sim_buffer.clear();
+  sim_lock.unlock();
+
+  this->jaccard_constraints_marker.header.frame_id = this->odom_frame;  // Replace with appropriate frame ID
+  this->jaccard_constraints_marker.header.stamp = ros::Time::now();
+  this->jaccard_constraints_marker.ns = "line_namespace";
+  this->jaccard_constraints_marker.id++;
+
+  std::unique_lock<decltype(this->keyframes_mutex)> kf_lock(this->keyframes_mutex);
   auto current_kf = this->keyframes.back();
-  lock.unlock();
+  kf_lock.unlock();
   static auto last_kf = Keyframe{};
-  
+
   if (this->n_factor == 0) {
     auto variance = (gtsam::Vector(6) << 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12).finished();
     gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
@@ -1863,18 +1897,49 @@ void dliom::OdomNode::addOdomFactor() {
     ROS_DEBUG("Add Odomfactor: 0 %.1f %.1f %.1f", current_kf.pose.p.x(), current_kf.pose.p.y(), current_kf.pose.p.z());
   } else {
     auto pose_to = state2gtsam(current_kf.pose);
-    auto pose_from = state2gtsam(last_kf.pose);
-    auto variance = (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished();
-    gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance);
-    this->graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(n_factor - 1, n_factor, pose_from.between(pose_to), noise);
+    auto max_it = std::max_element(kfs.begin(), kfs.end(), [](const auto& a, const auto& b) { return a.similarity < b.similarity; });
+    auto max_sim = max_it->similarity;
+    auto gicp_score = this->gicp.getFinalError(); // TODO use average across alignments between n_kf and n_kf - 1
+
+    std::string map;
+    std::string sim;
+
+    for (const auto& [kf_idx, similarity]: kfs) {
+      sim += to_string_with_precision(similarity, 1) + ",";
+      std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+      auto keyframe = this->keyframes[kf_idx];
+      lock.unlock();
+      auto pose_from = state2gtsam(keyframe.pose);
+      float weight = gicp_score;
+      if (similarity > 0) {
+        float normalized_sim = similarity / max_sim;
+        weight = normalized_sim; // / gicp_score; 
+      }
+      
+      auto variance = (gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished();
+      gtsam::noiseModel::Diagonal::shared_ptr noise = gtsam::noiseModel::Diagonal::Variances(variance * weight);
+      this->graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(kf_idx, n_factor, pose_from.between(pose_to), noise);
+      map += std::to_string(kf_idx) + ",";
+      
+      // TODO only add if pretty high jaccard score, i.e. jaccard_sim_thresh_ * 2?
+
+      geometry_msgs::Point p1, p2;
+      p1.x = pose_from.x();
+      p1.y = pose_from.y();
+      p1.z = pose_from.z();
+      p2.x = pose_to.x();
+      p2.y = pose_to.y();
+      p2.z = pose_to.z();
+      this->jaccard_constraints_marker.points.push_back(p1);
+      this->jaccard_constraints_marker.points.push_back(p2);
+    }
+    
     this->estimate.insert(n_factor, pose_to);
-    ROS_DEBUG("Add Odomfactor %d %d from (%.1f,%.1f,%.1f) to (%.1f,%.1f,%.1f)", n_factor - 1, n_factor, current_kf.pose.p.x(), 
-                                                                                        current_kf.pose.p.y(),
-                                                                                        current_kf.pose.p.z(),
-                                                                                        last_kf.pose.p.x(),
-                                                                                        last_kf.pose.p.y(),
-                                                                                        last_kf.pose.p.z());
-  }
+    ROS_DEBUG("Add Odomfactors %d %d: %s %s | %f", n_factor - 1, n_factor, map.c_str(), sim.c_str(), max_sim);
+  }     
+
+  this->jaccard_constraints_ros.markers.push_back(this->jaccard_constraints_marker);
+  this->jaccard_constraints_pub.publish(this->jaccard_constraints_ros);
 
   last_kf = current_kf;
   ++this->n_factor;
@@ -1910,7 +1975,7 @@ void dliom::OdomNode::setAdaptiveParams() {
 
 }
 
-void dliom::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames) {
+void dliom::OdomNode::pushSubmapIndices(const std::vector<float>& dists, int k, const std::vector<int>& frames) {
 
   // make sure dists is not empty
   if (!dists.size()) { return; }
@@ -1931,57 +1996,36 @@ void dliom::OdomNode::pushSubmapIndices(std::vector<float> dists, int k, std::ve
   float kth_element = pq.top();
 
   // get all elements smaller or equal to the kth smallest element
+  // TODO std::copy if
   for (int i = 0; i < dists.size(); ++i) {
     if (dists[i] <= kth_element)
-      this->submap_kf_curr.push_back(Similarity { frames[i], 0.f });
+      this->submap_kf_curr.push_back(Similarity { frames[i], dists[i] / kth_element });
   }
 
 }
 
 void dliom::OdomNode::correctPoses()
 {
-  if (this->is_loop)
-  {
-       this->global_kf_pose_ros.poses.clear();
-      for (size_t i = 0; i < this->optimized_estimate.size(); i++)
-      {
-        geometry_msgs::Pose p;
-        p.position.x = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[0];
-        p.position.y = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[1];
-        p.position.z = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[2];
-
-        p.orientation.w = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().w();
-        p.orientation.x = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().x();
-        p.orientation.y = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().y();
-        p.orientation.z = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().z();
-        this->global_kf_pose_ros.poses.push_back(p);
-      }
-      this->global_kf_pose_ros.header.stamp = ros::Time::now();
-      this->global_kf_pose_ros.header.frame_id = this->odom_frame;
-      this->global_kf_pose_pub.publish(this->global_kf_pose_ros);
-      ROS_DEBUG("Publishing %ld poses!", this->optimized_estimate.size());
-      this->is_loop = false;
+  if (!this->optimized_estimate.empty()) {
+    this->global_kf_pose_ros.poses.clear();
+    for (size_t i = 0; i < this->optimized_estimate.size(); i++)
+    {
+      geometry_msgs::Pose p;
+      p.position.x = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[0];
+      p.position.y = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[1];
+      p.position.z = this->optimized_estimate.at<gtsam::Pose3>(i).translation().vector().cast<float>()[2];
+  
+      p.orientation.w = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().w();
+      p.orientation.x = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().x();
+      p.orientation.y = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().y();
+      p.orientation.z = this->optimized_estimate.at<gtsam::Pose3>(i).rotation().toQuaternion().z();
+      this->global_kf_pose_ros.poses.push_back(p);
+    }
+    this->global_kf_pose_ros.header.stamp = ros::Time::now();
+    this->global_kf_pose_ros.header.frame_id = this->odom_frame;
+    this->global_kf_pose_pub.publish(this->global_kf_pose_ros);
   }
-  else
-  {
-      // auto idx_latest_optimized_estimate = this->optimized_estimate.size()
-      // geometry_msgs::Pose p;
-      // p.position.x = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[0];
-      // p.position.y = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[1];
-      // p.position.z = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().vector().cast<float>()[2];
-      //
-      // p.orientation.w = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().w();
-      // p.orientation.x = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().x();
-      // p.orientation.y = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().y();
-      // p.orientation.z = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().z();
-      // this->global_pose.poses.push_back(p);
-
-  }
-    // this->lidarPose.p = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().cast<float>();
-    // this->lidarPose.q = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().cast<float>();
-//    this->state.p = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).translation().cast<float>();
-//    this->state.q = this->optimized_estimate.at<gtsam::Pose3>(idx_latest_optimized_estimate).rotation().toQuaternion().cast<float>();
-    // this->updateState();
+  this->is_loop = false;
 }
 
 void dliom::OdomNode::buildSubmap(State vehicle_state) {
@@ -2038,7 +2082,7 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
   this->submap_kf_curr.erase(last, this->submap_kf_curr.end());
 
   // check if submap has changed from previous iteration
-  if (true){
+  if (true) {
 
     this->submap_hasChanged = true;
 
@@ -2078,7 +2122,7 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
 }
 
 void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud) {
-    // clear vector of keyframe indices to use for submap
+  // clear vector of keyframe indices to use for submap
   this->submap_kf_curr.clear();
 
   // calculate distance between current pose and poses in keyframe set
@@ -2101,7 +2145,8 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
   auto size_submap = this->submap_kf_curr.size();
   std::vector<int> intersection_nums(size_submap);
   std::vector<int> union_nums(size_submap);
-  std::vector<Similarity> jaccardian_candidates(size_submap);
+  std::vector<Similarity> jaccardian_candidates;
+  jaccardian_candidates.reserve(size_submap);
 
   if (this->submap_kf_curr.size() > 3)
   {
@@ -2129,18 +2174,14 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
 
           union_ = cloud->size() + size - intersection;
           auto similarity = float(intersection) / float(union_);
-          jaccardian_candidates[i] = Similarity{kf_idx, similarity};
+          if (similarity > this->jaccard_sim_thresh_) jaccardian_candidates.emplace_back(Similarity{kf_idx, similarity});
       }
 
       if (jaccardian_candidates.size() > 3)
       {
-        const auto similarity_sufficient = [&](const auto a) { return a.similarity > this->jaccard_sim_thresh_; };
-        std::copy_if(jaccardian_candidates.begin(), jaccardian_candidates.end(), std::back_inserter(this->submap_kf_curr), similarity_sufficient);
-        this->submap_kf_curr.resize(jaccardian_candidates.size());
+        this->submap_kf_curr = jaccardian_candidates;
       }
       else {
-        // std::sort(jaccardian_candidates.begin(), jaccardian_candidates.end(), [](const auto& a, const auto& b) { return a. similarity > b.similarity; }); 
-        // this->submap_kf_idx_curr = jaccardian_candidates;
         ROS_DEBUG("Bad jaccardian match!"); 
       }
   }
@@ -2168,13 +2209,16 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
 
     this->jaccard_ros.clear();
     
-    for (auto [k, _] : this->submap_kf_curr) {
+    std::string s;
+    for (auto [k, sim] : this->submap_kf_curr) {
 
       // create current submap cloud
       lock.lock();
       *submap_cloud_ += *this->keyframes[k].cloud;
       const auto& pose = this->keyframes[k].pose;
       lock.unlock();
+
+      s += std::to_string(k) + ",";
 
       pcl::PointXYZ p;
       p.x = pose.p.x();
@@ -2197,12 +2241,15 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
     this->submap_kdtree = this->gicp_temp.target_kdtree_;
 
     this->submap_kf_prev = this->submap_kf_curr;
+    
+    ROS_DEBUG("Publishing %s", s.c_str());
+
+    // Publish
+    this->jaccard_ros.header.stamp = this->scan_stamp;
+    this->jaccard_ros.header.frame_id = this->odom_frame;
+    this->jaccard_pub.publish(this->jaccard_ros);
   }
 
-  // Publish
-  this->jaccard_ros.header.stamp = this->scan_stamp;
-  this->jaccard_ros.header.frame_id = this->odom_frame;
-  this->jaccard_pub.publish(this->jaccard_ros);
 }
 
 void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud) {

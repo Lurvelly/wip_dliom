@@ -24,6 +24,7 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 find_package(GTSAM 4.0.3 EXACT REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(TBB REQUIRED)
 find_package(GeographicLib REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
@@ -31,6 +32,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   sensor_msgs
   geometry_msgs
+  visualization_msgs
   nav_msgs
   pcl_ros
   message_generation
@@ -56,6 +58,7 @@ catkin_package(
     std_msgs
     sensor_msgs
     geometry_msgs
+    visualization_msgs
     pcl_ros
   INCLUDE_DIRS
     include
@@ -79,6 +82,7 @@ set(DLIOM_LIBS
     ${PCL_LIBRARIES} 
     ${OpenMP_LIBS} 
     Threads::Threads 
+    TBB::tbb
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
     gtsam

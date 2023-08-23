@@ -75,5 +75,5 @@ dliom:
 
   gnss:
     enable: true
-    threshCov: 0.1
+    threshCov: 0.5
     alignmentThreshold: 25

@@ -46,7 +46,6 @@ private:
   void preprocessPoints();
   void deskewPointcloud();
   void initializeInputTarget();
-  void initializeKeyframesAndGraph();
   void setInputSource();
 
   void initializeDLIOM();
@@ -67,6 +66,7 @@ private:
 
   void propagateState();
   void updateState();
+  void addKeyframe();
 
   void setAdaptiveParams();
   void setKeyframeCloud();
@@ -80,7 +80,7 @@ private:
   bool newKeyframe();
   void computeConvexHull();
   void computeConcaveHull();
-  void pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames);
+  void pushSubmapIndices(const std::vector<float>& dists, int k, const std::vector<int>& frames);
   void correctPoses();
   void buildSubmap(State vehicle_state);
   void buildJaccardSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
@@ -88,6 +88,9 @@ private:
   void updateKeyframes();
   void buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
   void pauseSubmapBuildIfNeeded();
+  void updateBackendData();
+  void poseGraphOptimization();
+  void updateGraphOptimization();
 
   void debug();
 
@@ -108,7 +111,9 @@ private:
   ros::Publisher kf_cloud_pub;
   ros::Publisher deskewed_pub;
   ros::Publisher jaccard_pub;
-
+  ros::Publisher jaccard_constraints_pub;
+  // ros::Publisher gnss_constraints_pub;
+  
   // ROS Msgs
   nav_msgs::Odometry odom_ros;
   geometry_msgs::PoseStamped pose_ros;
@@ -116,7 +121,9 @@ private:
   geometry_msgs::PoseArray kf_pose_ros;
   geometry_msgs::PoseArray global_kf_pose_ros;
   pcl::PointCloud<pcl::PointXYZ> jaccard_ros;
-
+  visualization_msgs::MarkerArray jaccard_constraints_ros;
+  visualization_msgs::Marker jaccard_constraints_marker;
+  
   // Flags
   std::atomic<bool> dliom_initialized;
   std::atomic<bool> first_valid_scan;
@@ -132,7 +139,8 @@ private:
   std::thread publish_keyframe_thread;
   std::thread metrics_thread;
   std::thread debug_thread;
-
+  std::thread graph_thread; 
+ 
   // Trajectory
   std::vector<std::pair<Eigen::Vector3f, Eigen::Quaternionf>> trajectory;
   double length_traversed;
@@ -186,6 +194,8 @@ private:
 
   std::vector<Similarity> submap_kf_curr;
   std::vector<Similarity> submap_kf_prev;
+  boost::circular_buffer<std::vector<Similarity>> kf_sim_buffer;
+  std::mutex mtx_kf_sim;
 
   bool new_submap_is_ready;
   std::future<void> submap_future;
