@@ -86,7 +86,7 @@ private:
   void buildJaccardSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
   void updateKeyframesAndGraph();
   void updateKeyframes();
-  void buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud);
+  void buildKeyframesAndSubmap(State vehicle_state);
   void pauseSubmapBuildIfNeeded();
   void updateBackendData();
   void poseGraphOptimization();

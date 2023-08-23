@@ -46,8 +46,8 @@ dliom:
 
     keyframe:
       threshD: 1.0
-      threshR: 45.0
-      threshJaccardCorr: 3.0 
+      threshR: 22.5
+      threshJaccardCorr: 2.0 
       threshJaccardSim: 0.2
 
     submap:

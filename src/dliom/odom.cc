@@ -826,7 +826,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
     this->initializeInputTarget();
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state, this->current_scan);
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state);
     this->submap_future.wait(); // wait until completion
     return;
   }
@@ -843,7 +843,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   if (this->new_submap_is_ready) {
     this->main_loop_running = false;
     this->submap_future =
-      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state, this->current_scan);
+      std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state);
   } else {
     lock.lock();
     this->main_loop_running = false;
@@ -1878,11 +1878,6 @@ void dliom::OdomNode::addOdomFactor() {
   this->kf_sim_buffer.clear();
   sim_lock.unlock();
 
-  this->jaccard_constraints_marker.header.frame_id = this->odom_frame;  // Replace with appropriate frame ID
-  this->jaccard_constraints_marker.header.stamp = ros::Time::now();
-  this->jaccard_constraints_marker.ns = "line_namespace";
-  this->jaccard_constraints_marker.id++;
-
   std::unique_lock<decltype(this->keyframes_mutex)> kf_lock(this->keyframes_mutex);
   auto current_kf = this->keyframes.back();
   kf_lock.unlock();
@@ -1922,7 +1917,10 @@ void dliom::OdomNode::addOdomFactor() {
       map += std::to_string(kf_idx) + ",";
       
       // TODO only add if pretty high jaccard score, i.e. jaccard_sim_thresh_ * 2?
-
+      this->jaccard_constraints_marker.header.frame_id = this->odom_frame;  // Replace with appropriate frame ID
+      this->jaccard_constraints_marker.header.stamp = ros::Time::now();
+      this->jaccard_constraints_marker.ns = "line_namespace";
+      this->jaccard_constraints_marker.id++;
       geometry_msgs::Point p1, p2;
       p1.x = pose_from.x();
       p1.y = pose_from.y();
@@ -1932,14 +1930,13 @@ void dliom::OdomNode::addOdomFactor() {
       p2.z = pose_to.z();
       this->jaccard_constraints_marker.points.push_back(p1);
       this->jaccard_constraints_marker.points.push_back(p2);
+      this->jaccard_constraints_ros.markers.push_back(this->jaccard_constraints_marker);
+      this->jaccard_constraints_pub.publish(this->jaccard_constraints_ros);
     }
     
     this->estimate.insert(n_factor, pose_to);
     ROS_DEBUG("Add Odomfactors %d %d: %s %s | %f", n_factor - 1, n_factor, map.c_str(), sim.c_str(), max_sim);
   }     
-
-  this->jaccard_constraints_ros.markers.push_back(this->jaccard_constraints_marker);
-  this->jaccard_constraints_pub.publish(this->jaccard_constraints_ros);
 
   last_kf = current_kf;
   ++this->n_factor;
@@ -2252,7 +2249,7 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
 
 }
 
-void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state, pcl::PointCloud<PointType>::ConstPtr cloud) {
+void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
   // transform the new keyframe(s) and associated covariance list(s)
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
@@ -2291,7 +2288,7 @@ void dliom::OdomNode::buildKeyframesAndSubmap(State vehicle_state, pcl::PointClo
 
   // this->buildSubmap(vehicle_state);
 
-  this->buildJaccardSubmap(vehicle_state, cloud);
+  this->buildJaccardSubmap(vehicle_state, this->current_scan);
 }
 
 void dliom::OdomNode::pauseSubmapBuildIfNeeded() {
