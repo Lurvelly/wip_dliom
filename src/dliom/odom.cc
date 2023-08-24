@@ -94,6 +94,11 @@ dliom::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->gnss_buffer.set_capacity(1);
   this->gnss_aligned = false;
 
+  this->keyframes.reserve(1000);
+  this->keyframe_normals.reserve(1000);
+  this->keyframe_timestamps.reserve(1000);
+  this->keyframe_transformations.reserve(1000);
+  this->trajectory.reserve(30'000); // ~20 Hz for 25 Mins
   this->kf_sim_buffer.set_capacity(1);
 
   this->original_scan = pcl::PointCloud<PointType>::ConstPtr (boost::make_shared<const pcl::PointCloud<PointType>>());
@@ -852,7 +857,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
   }
 
   // Update trajectory
-  this->trajectory.push_back( std::make_pair(this->state.p, this->state.q) );
+  this->trajectory.emplace_back(this->state.p, this->state.q);
 
   // Update time stamps
   this->lidar_rates.push_back( 1. / (this->scan_stamp - this->prev_scan_stamp) );
@@ -2134,6 +2139,7 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
     ds.push_back(d);
     keyframe_nn.push_back(i);
   }
+  size_t n_current_kf = this->keyframes.size();
   lock.unlock();
 
   // get indices for top K nearest neighbor keyframe poses
@@ -2177,9 +2183,8 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
       if (jaccardian_candidates.size() > 3)
       {
         this->submap_kf_curr = jaccardian_candidates;
-      }
-      else {
-        ROS_DEBUG("Bad jaccardian match!"); 
+      } else {
+        if (n_current_kf > 3) ROS_DEBUG("Bad jaccardian match!"); 
       }
   }
 
