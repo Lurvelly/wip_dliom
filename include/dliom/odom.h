@@ -157,6 +157,7 @@ private:
 
   // Factors
   void addOdomFactor();
+  void addLoopFactor();
   void addGNSSFactor();
   gtsam::Pose3 state2gtsam(const Pose& p);
 

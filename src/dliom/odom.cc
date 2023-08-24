@@ -761,8 +761,6 @@ void dliom::OdomNode::initializeInputTarget() {
   this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
   this->keyframe_transformations.push_back(this->T_corr);
   ROS_DEBUG("Added first keyframe: %.1f %.1f %.1f", this->lidarPose.p.x(), this->lidarPose.p.y(), this->lidarPose.p.z());
-
-  updateBackendData();
 }
 
 void dliom::OdomNode::setInputSource() {
@@ -833,6 +831,7 @@ void dliom::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr&
     this->submap_future =
       std::async( std::launch::async, &dliom::OdomNode::buildKeyframesAndSubmap, this, this->state);
     this->submap_future.wait(); // wait until completion
+    updateBackendData();
     return;
   }
 
@@ -1811,7 +1810,7 @@ void dliom::OdomNode::updateBackendData() {
 void dliom::OdomNode::poseGraphOptimization() {
   while (this->nh.ok() && ros::ok()) {
     this->addOdomFactor();
-    // this->addLoopFactor();
+    this->addLoopFactor();
     this->addGNSSFactor();
     this->updateGraphOptimization();
     this->correctPoses();
@@ -1829,6 +1828,10 @@ void dliom::OdomNode::updateGraphOptimization() {
     this->graph.resize(0);
     this->estimate.clear();
     this->optimized_estimate = this->optimizer.calculateEstimate();
+}
+
+void dliom::OdomNode::addLoopFactor() {
+
 }
 
 void dliom::OdomNode::addGNSSFactor() {
@@ -1977,9 +1980,11 @@ void dliom::OdomNode::setAdaptiveParams() {
 }
 
 void dliom::OdomNode::pushSubmapIndices(const std::vector<float>& dists, int k, const std::vector<int>& frames) {
-
   // make sure dists is not empty
-  if (!dists.size()) { return; }
+  if (dists.empty()) { return; }
+
+  // handle special case in very first iteration when distance = 0
+  if (dists.size() == 1) { this->submap_kf_curr.push_back(Similarity {frames[0], 1.f}); return; };
 
   // maintain max heap of at most k elements
   std::priority_queue<float> pq;
@@ -1999,10 +2004,10 @@ void dliom::OdomNode::pushSubmapIndices(const std::vector<float>& dists, int k, 
   // get all elements smaller or equal to the kth smallest element
   // TODO std::copy if
   for (int i = 0; i < dists.size(); ++i) {
-    if (dists[i] <= kth_element)
+    if (dists[i] <= kth_element) {
       this->submap_kf_curr.push_back(Similarity { frames[i], dists[i] / kth_element });
+    }
   }
-
 }
 
 void dliom::OdomNode::correctPoses()
@@ -2139,7 +2144,6 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
     ds.push_back(d);
     keyframe_nn.push_back(i);
   }
-  size_t n_current_kf = this->keyframes.size();
   lock.unlock();
 
   // get indices for top K nearest neighbor keyframe poses
@@ -2184,7 +2188,7 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
       {
         this->submap_kf_curr = jaccardian_candidates;
       } else {
-        if (n_current_kf > 3) ROS_DEBUG("Bad jaccardian match!"); 
+        ROS_DEBUG("Bad jaccardian match!"); 
       }
   }
 
@@ -2242,7 +2246,10 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
     this->gicp_temp.setInputTarget(this->submap_cloud);
     this->submap_kdtree = this->gicp_temp.target_kdtree_;
 
-    this->submap_kf_prev = this->submap_kf_curr;
+    {
+      std::unique_lock<decltype(this->mtx_kf_sim)> lock(this->mtx_kf_sim);
+      this->submap_kf_prev = this->submap_kf_curr;
+    }
     
     // Publish
     this->jaccard_ros.header.stamp = this->scan_stamp;
@@ -2325,7 +2332,7 @@ void dliom::OdomNode::debug() {
     std::accumulate(this->comp_times.begin(), this->comp_times.end(), 0.0) / this->comp_times.size();
 
   // Average sensor rates
-  int win_size = 100;
+  size_t win_size = 100;
   double avg_imu_rate;
   double avg_lidar_rate;
   if (this->imu_rates.size() < win_size) {
@@ -2342,16 +2349,19 @@ void dliom::OdomNode::debug() {
     avg_lidar_rate =
       std::accumulate(this->lidar_rates.end()-win_size, this->lidar_rates.end(), 0.0) / win_size;
   }
-  if (this->gnss_rates.size() < win_size) {
-    this->avg_gnss_rate =
-      std::accumulate(this->gnss_rates.begin(), this->gnss_rates.end(), 0.0) / this->gnss_rates.size();
+  if (this->gnss_rates.empty()) {
+    this->avg_gnss_rate = 0;
   } else {
-    this->avg_gnss_rate =
-      std::accumulate(this->gnss_rates.end()-win_size, this->gnss_rates.end(), 0.0) / win_size;
+    if (this->gnss_rates.size() < win_size) {
+      this->avg_gnss_rate =
+        std::accumulate(this->gnss_rates.begin(), this->gnss_rates.end(), 0.0) / this->gnss_rates.size();
+    } else {
+      this->avg_gnss_rate =
+        std::accumulate(this->gnss_rates.end()-win_size, this->gnss_rates.end(), 0.0) / win_size;
+    }
   }
 
   // RAM Usage
-  double vm_usage = 0.0;
   double resident_set = 0.0;
   std::ifstream stat_stream("/proc/self/stat", std::ios_base::in); //get info from proc directory
   std::string pid, comm, state, ppid, pgrp, session, tty_nr;
