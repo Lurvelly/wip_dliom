@@ -1800,8 +1800,7 @@ void dliom::OdomNode::updateKeyframesAndGraph() {
 
 void dliom::OdomNode::updateBackendData() {
   std::unique_lock<decltype(this->mtx_kf_sim)> lock(this->mtx_kf_sim);
-  this->kf_sim_buffer.push_back(this->submap_kf_curr); 
-  lock.unlock();
+  this->kf_sim_buffer.push_back(this->submap_kf_prev); 
 }
 
 void dliom::OdomNode::poseGraphOptimization() {
@@ -2114,6 +2113,7 @@ void dliom::OdomNode::buildSubmap(State vehicle_state) {
     this->gicp_temp.setInputTarget(this->submap_cloud);
     this->submap_kdtree = this->gicp_temp.target_kdtree_;
 
+    std::unique_lock<decltype(this->mtx_kf_sim)> lock(this->mtx_kf_sim);
     this->submap_kf_prev = this->submap_kf_curr;
   }
 }
@@ -2239,8 +2239,6 @@ void dliom::OdomNode::buildJaccardSubmap(State vehicle_state, pcl::PointCloud<Po
 
     this->submap_kf_prev = this->submap_kf_curr;
     
-    ROS_DEBUG("Publishing %s", s.c_str());
-
     // Publish
     this->jaccard_ros.header.stamp = this->scan_stamp;
     this->jaccard_ros.header.frame_id = this->odom_frame;
